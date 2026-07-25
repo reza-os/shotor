@@ -1,0 +1,66 @@
+import 'package:flutter/material.dart';
+
+import '../models/zone_area.dart';
+
+const List<ZoneArea> mockZones = [
+  ZoneArea(
+    name: 'آغل اصلی',
+    description: 'محل ورود و خروج روزانه گله',
+    type: ZoneType.stable,
+    left: 0.08,
+    top: 0.68,
+    width: 0.28,
+    height: 0.18,
+    color: Color(0xFF008B62),
+  ),
+  ZoneArea(
+    name: 'چراگاه مجاز',
+    description: 'محدوده مجاز حرکت روزانه گله',
+    type: ZoneType.pasture,
+    left: 0.42,
+    top: 0.18,
+    width: 0.42,
+    height: 0.25,
+    color: Color(0xFF16965C),
+  ),
+  ZoneArea(
+    name: 'آبشخور',
+    description: 'نقطه ثبت عبور و توقف گله',
+    type: ZoneType.water,
+    left: 0.55,
+    top: 0.55,
+    width: 0.22,
+    height: 0.12,
+    color: Color(0xFF086EBB),
+  ),
+  ZoneArea(
+    name: 'مسیر گله شمالی',
+    description: 'مسیر مجاز بین آغل و چراگاه',
+    type: ZoneType.route,
+    left: 0.22,
+    top: 0.44,
+    width: 0.48,
+    height: 0.10,
+    color: Color(0xFF7B3FB3),
+  ),
+  ZoneArea(
+    name: 'محدوده هشدار',
+    description: 'نزدیک شدن به مرز خروج',
+    type: ZoneType.warning,
+    left: 0.05,
+    top: 0.18,
+    width: 0.25,
+    height: 0.20,
+    color: Color(0xFFE87500),
+  ),
+  ZoneArea(
+    name: 'محدوده ممنوع',
+    description: 'عبور از این محدوده باید هشدار فوری بدهد',
+    type: ZoneType.forbidden,
+    left: 0.72,
+    top: 0.72,
+    width: 0.22,
+    height: 0.16,
+    color: Color(0xFFD32F2F),
+  ),
+];
