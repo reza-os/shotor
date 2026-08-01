@@ -43,15 +43,42 @@ void main() {
   runApp(const SarabanApp());
 }
 
-BoxDecoration cardDecoration() {
+class AppColors {
+  static const Color primary = Color(0xFF062C5E);
+  static const Color secondary = Color(0xFF003B7A);
+  static const Color success = Color(0xFF008B62);
+  static const Color warning = Color(0xFFE87500);
+  static const Color danger = Color(0xFFD32F2F);
+  static const Color background = Color(0xFFF5F7FA);
+  static const Color card = Colors.white;
+  static const Color textDark = Color(0xFF1F2937);
+  static const Color textMuted = Color(0xFF6B7280);
+  static const Color border = Color(0xFFE5EAF0);
+
+  static const Color successLight = Color(0xFFEAF8F2);
+  static const Color warningLight = Color(0xFFFFF3E0);
+  static const Color dangerLight = Color(0xFFFFEBEE);
+  static const Color blueLight = Color(0xFFEAF1FB);
+}
+
+BoxDecoration cardDecoration({
+  Color color = AppColors.card,
+  double radius = 20,
+  bool bordered = false,
+}) {
   return BoxDecoration(
-    color: Colors.white,
-    borderRadius: BorderRadius.circular(18),
+    color: color,
+    borderRadius: BorderRadius.circular(radius),
+    border: bordered
+        ? Border.all(
+            color: AppColors.border,
+          )
+        : null,
     boxShadow: [
       BoxShadow(
-        color: Colors.black.withOpacity(0.07),
-        blurRadius: 12,
-        offset: const Offset(0, 6),
+        color: Colors.black.withOpacity(0.06),
+        blurRadius: 18,
+        offset: const Offset(0, 8),
       ),
     ],
   );
@@ -88,64 +115,126 @@ class SarabanShell extends StatefulWidget {
 
 class _SarabanShellState extends State<SarabanShell> {
   int selectedIndex = 0;
-late final List<Widget> pages;
+
+  final List<Widget> pages = const [
+    HomePage(),
+    ReceivePage(),
+    MapPage(),
+    AlertsPage(),
+    MorePage(),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+
+    AlertService.refreshUnreviewedCount();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 430),
-          child: IndexedStack(
-            index: selectedIndex,
-            children: pages,
+      backgroundColor: AppColors.background,
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFFF7FAFD),
+              Color(0xFFF5F7FA),
+            ],
+          ),
+        ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 430),
+            child: IndexedStack(
+              index: selectedIndex,
+              children: pages,
+            ),
           ),
         ),
       ),
       bottomNavigationBar: Directionality(
         textDirection: TextDirection.rtl,
-        child: BottomNavigationBar(
-          currentIndex: selectedIndex,
-          type: BottomNavigationBarType.fixed,
-          selectedItemColor: const Color(0xFF003B7A),
-          unselectedItemColor: Colors.grey,
-          onTap: (index) {
-            setState(() {
-              selectedIndex = index;
-            });
-          },
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.home_rounded),
-              label: 'خانه',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.settings_input_antenna_rounded),
-              label: 'دریافت',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.map_rounded),
-              label: 'نقشه',
-            ),
-            BottomNavigationBarItem(
-              icon: Badge(
-                label: Text('3'),
-                child: Icon(Icons.notifications_rounded),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.08),
+                blurRadius: 18,
+                offset: const Offset(0, -6),
               ),
-              label: 'هشدارها',
+            ],
+          ),
+          child: SafeArea(
+            top: false,
+            child: BottomNavigationBar(
+              currentIndex: selectedIndex,
+              type: BottomNavigationBarType.fixed,
+              backgroundColor: Colors.white,
+              elevation: 0,
+              selectedItemColor: AppColors.primary,
+              unselectedItemColor: Colors.grey,
+              selectedLabelStyle: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+              unselectedLabelStyle: const TextStyle(
+                fontSize: 11,
+              ),
+              onTap: (index) {
+                setState(() {
+                  selectedIndex = index;
+                });
+              },
+              items: [
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.home_rounded),
+                  label: 'خانه',
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.settings_input_antenna_rounded),
+                  label: 'دریافت',
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.map_rounded),
+                  label: 'نقشه',
+                ),
+                BottomNavigationBarItem(
+                  icon: ValueListenableBuilder<int>(
+                    valueListenable: AlertService.unreviewedCountNotifier,
+                    builder: (context, count, child) {
+                      if (count <= 0) {
+                        return const Icon(Icons.notifications_rounded);
+                      }
+
+                      return Badge(
+                        label: Text(
+                          count > 99 ? '99+' : count.toString(),
+                        ),
+                        child: const Icon(Icons.notifications_rounded),
+                      );
+                    },
+                  ),
+                  label: 'هشدارها',
+                ),
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.more_horiz_rounded),
+                  label: 'بیشتر',
+                ),
+              ],
             ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.more_horiz_rounded),
-              label: 'بیشتر',
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
-
-
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -157,10 +246,28 @@ class _HomePageState extends State<HomePage> {
   bool isLoading = true;
   List<TagRecord> records = [];
 
+  Timer? homeRefreshTimer;
+
   @override
   void initState() {
     super.initState();
+
     loadRecords();
+
+    homeRefreshTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) {
+        if (!mounted) return;
+
+        setState(() {});
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    homeRefreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> loadRecords() async {
@@ -174,6 +281,69 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  DateTime? recordDateTime(TagRecord record) {
+    final text = record.receivedDateTime.trim();
+
+    if (text.isEmpty) return null;
+
+    return DateTime.tryParse(text);
+  }
+
+  bool isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  List<TagRecord> getTodayRecords(List<TagRecord> source) {
+    final now = DateTime.now();
+
+    return source.where((record) {
+      final parsed = recordDateTime(record);
+
+      if (parsed == null) return false;
+
+      return isSameDay(parsed, now);
+    }).toList();
+  }
+
+  List<TagRecord> getLatestTodayRecordsByTag(List<TagRecord> source) {
+    final todayRecords = getTodayRecords(source);
+
+    final result = <String, TagRecord>{};
+
+    for (final record in todayRecords) {
+      if (!result.containsKey(record.tagId)) {
+        result[record.tagId] = record;
+      }
+    }
+
+    return result.values.toList();
+  }
+
+  int getTodayQueuedCount(List<TagRecord> source) {
+    final todayRecords = getTodayRecords(source);
+
+    return todayRecords.where((record) {
+      return record.sendStatus == TagSendStatus.queued ||
+          record.sendStatus == TagSendStatus.failed;
+    }).length;
+  }
+
+  int getTodayLowBatteryCount(List<TagRecord> source) {
+    final latestTodayRecords = getLatestTodayRecordsByTag(source);
+
+    return latestTodayRecords.where((record) {
+      return record.isBatteryLow;
+    }).length;
+  }
+
+  String getTodayLastReceiveText(List<TagRecord> source) {
+    final todayRecords = getTodayRecords(source);
+
+    if (todayRecords.isEmpty) return '-';
+
+    return todayRecords.first.receivedTime;
+  }
+
   void goToTab(int index) {
     final shellState = context.findAncestorStateOfType<_SarabanShellState>();
 
@@ -184,17 +354,13 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final totalTags = records.length;
+    final todayRecords = getTodayRecords(records);
+    final latestTodayTags = getLatestTodayRecordsByTag(records);
 
-    final lowBatteryCount = records.where((record) {
-      return record.isBatteryLow;
-    }).length;
-
-    final queuedCount = records.where((record) {
-      return record.sendStatus == TagSendStatus.queued;
-    }).length;
-
-    final lastReceiveText = records.isEmpty ? '-' : records.first.receivedTime;
+    final totalTags = latestTodayTags.length;
+    final lowBatteryCount = getTodayLowBatteryCount(records);
+    final queuedCount = getTodayQueuedCount(records);
+    final lastReceiveText = getTodayLastReceiveText(records);
 
     return RefreshIndicator(
       onRefresh: loadRecords,
@@ -234,6 +400,7 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ],
                   ),
+
                   const SizedBox(height: 14),
 
                   Container(
@@ -255,28 +422,30 @@ class _HomePageState extends State<HomePage> {
                               MetricCard(
                                 title: 'تگ‌های دیده‌شده',
                                 value: totalTags.toString(),
-                                subtitle: 'رکورد ثبت‌شده',
+                                subtitle: 'امروز',
                                 icon: Icons.pets_rounded,
                                 color: const Color(0xFF16965C),
                               ),
                               MetricCard(
                                 title: 'باتری ضعیف',
                                 value: lowBatteryCount.toString(),
-                                subtitle: 'نیازمند بررسی',
+                                subtitle: 'امروز',
                                 icon: Icons.battery_alert_rounded,
                                 color: const Color(0xFFE87500),
                               ),
                               MetricCard(
                                 title: 'ارسال‌نشده',
                                 value: queuedCount.toString(),
-                                subtitle: 'در صف ارسال',
+                                subtitle: 'امروز',
                                 icon: Icons.cloud_upload_rounded,
                                 color: const Color(0xFF086EBB),
                               ),
                               MetricCard(
                                 title: 'آخرین دریافت',
                                 value: lastReceiveText,
-                                subtitle: 'امروز',
+                                subtitle: todayRecords.isEmpty
+                                    ? 'امروز داده‌ای نیست'
+                                    : 'امروز',
                                 icon: Icons.sync_rounded,
                                 color: const Color(0xFF7B3FB3),
                               ),
@@ -339,12 +508,12 @@ class _HomePageState extends State<HomePage> {
                     decoration: cardDecoration(),
                     child: Column(
                       children: [
-                        const SectionTitle(title: 'تگ‌های دریافت‌شده اخیر'),
-                        if (records.isEmpty)
+                        const SectionTitle(title: 'تگ‌های دریافت‌شده امروز'),
+                        if (todayRecords.isEmpty)
                           const Padding(
                             padding: EdgeInsets.all(16),
                             child: Text(
-                              'هنوز رکوردی ثبت نشده است. از صفحه دریافت، JSON را پردازش کن.',
+                              'امروز هنوز رکوردی ثبت نشده است. از صفحه دریافت، JSON را پردازش کن.',
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 color: Colors.black54,
@@ -353,7 +522,7 @@ class _HomePageState extends State<HomePage> {
                             ),
                           )
                         else
-                          ...records
+                          ...todayRecords
                               .take(4)
                               .map((record) => RecentTagRow(record: record)),
                       ],
@@ -382,7 +551,6 @@ class _HomePageState extends State<HomePage> {
 
 
 
-
 class ReceivePage extends StatefulWidget {
   const ReceivePage({super.key});
 
@@ -394,6 +562,7 @@ class _ReceivePageState extends State<ReceivePage>
     with AutomaticKeepAliveClientMixin<ReceivePage> {
   @override
   bool get wantKeepAlive => true;
+
   final UsbAntennaService usbService = UsbAntennaService();
 
   static const int duplicateIgnoreSeconds = 10;
@@ -402,14 +571,14 @@ class _ReceivePageState extends State<ReceivePage>
 
   int duplicateSkipCount = 0;
 
-AppSettings appSettings = const AppSettings();
+  Timer? receiveRefreshTimer;
+
+  AppSettings appSettings = const AppSettings();
+
   final TextEditingController jsonController = TextEditingController(
     text:
         '{"Password":926877721,"State":3,"Lock":1,"Conter_Lock":10,"Battery_Percent":30,"Count":76}',
   );
-
-
-
 
   StreamSubscription<String>? usbSubscription;
 
@@ -426,20 +595,30 @@ AppSettings appSettings = const AppSettings();
   @override
   void initState() {
     super.initState();
+
     receivedRecords = [];
     loadReceivedRecords();
     loadAppSettings();
+
+    receiveRefreshTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) {
+        if (!mounted) return;
+        setState(() {});
+      },
+    );
   }
 
   @override
   void dispose() {
+    receiveRefreshTimer?.cancel();
+
     usbSubscription?.cancel();
     unawaited(usbService.dispose());
     jsonController.dispose();
+
     super.dispose();
   }
-
-
 
   Future<void> loadReceivedRecords() async {
     final loadedRecords = await LocalStorageService.loadTagRecords();
@@ -451,7 +630,6 @@ AppSettings appSettings = const AppSettings();
     });
   }
 
-
   Future<void> loadAppSettings() async {
     final settings = await AppSettingsService.loadSettings();
 
@@ -462,8 +640,29 @@ AppSettings appSettings = const AppSettings();
     });
   }
 
+  DateTime? recordDateTime(TagRecord record) {
+    final text = record.receivedDateTime.trim();
 
+    if (text.isEmpty) return null;
 
+    return DateTime.tryParse(text);
+  }
+
+  bool isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  List<TagRecord> getTodayRecords(List<TagRecord> source) {
+    final now = DateTime.now();
+
+    return source.where((record) {
+      final parsed = recordDateTime(record);
+
+      if (parsed == null) return false;
+
+      return isSameDay(parsed, now);
+    }).toList();
+  }
 
   Future<void> connectUsbDevice() async {
     try {
@@ -480,11 +679,11 @@ AppSettings appSettings = const AppSettings();
 
       usbSubscription = usbService.jsonStream.listen(
         (jsonText) async {
-         await processJsonText(
-           jsonText,
-           locationName: appSettings.defaultLocationName,
-           showSnackBar: false,
-         );
+          await processJsonText(
+            jsonText,
+            locationName: appSettings.defaultLocationName,
+            showSnackBar: false,
+          );
         },
         onError: (error) {
           if (!mounted) return;
@@ -509,6 +708,7 @@ AppSettings appSettings = const AppSettings();
         isUsbConnecting = false;
         usbStatus = 'متصل: ${usbService.connectedDeviceName}';
       });
+
       await UsbLogService.addLog(
         type: UsbLogType.connected,
         title: 'اتصال USB برقرار شد',
@@ -529,12 +729,11 @@ AppSettings appSettings = const AppSettings();
         usbStatus = 'اتصال ناموفق';
       });
 
-await UsbLogService.addLog(
-  type: UsbLogType.error,
-  title: 'خطا در اتصال USB',
-  message: e.toString(),
-);
-
+      await UsbLogService.addLog(
+        type: UsbLogType.error,
+        title: 'خطا در اتصال USB',
+        message: e.toString(),
+      );
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -550,6 +749,7 @@ await UsbLogService.addLog(
     usbSubscription = null;
 
     await usbService.disconnect();
+
     await UsbLogService.addLog(
       type: UsbLogType.disconnected,
       title: 'اتصال USB قطع شد',
@@ -569,8 +769,6 @@ await UsbLogService.addLog(
       ),
     );
   }
-
-
 
   String buildRecordSignature(AntennaPayload payload) {
     return '${payload.password}-'
@@ -598,7 +796,6 @@ await UsbLogService.addLog(
     return false;
   }
 
-
   Future<AppLocationResult> getLocationForRecord() async {
     if (mounted) {
       setState(() {
@@ -620,132 +817,134 @@ await UsbLogService.addLog(
     return result;
   }
 
+  Future<void> processJsonText(
+    String jsonText, {
+    required String locationName,
+    bool showSnackBar = true,
+  }) async {
+    try {
+      final payload = AntennaPayload.fromJsonString(jsonText.trim());
 
-Future<void> processJsonText(
-  String jsonText, {
-  required String locationName,
-  bool showSnackBar = true,
-}) async {
-  try {
-  final payload = AntennaPayload.fromJsonString(jsonText.trim());
+      final tagId = 'T-${payload.password}';
+      final signature = buildRecordSignature(payload);
 
-  final tagId = 'T-${payload.password}';
-  final signature = buildRecordSignature(payload);
+      if (shouldSkipDuplicate(signature)) {
+        setState(() {
+          duplicateSkipCount++;
+          lastUsbJson = jsonText.trim();
+          jsonController.text = jsonText.trim();
+          usbStatus = 'داده تکراری نادیده گرفته شد: $tagId';
+        });
 
-  if (shouldSkipDuplicate(signature)) {
-    setState(() {
-      duplicateSkipCount++;
-      lastUsbJson = jsonText.trim();
-      jsonController.text = jsonText.trim();
-      usbStatus = 'داده تکراری نادیده گرفته شد: $tagId';
-    });
+        if (showSnackBar) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('رکورد تکراری ذخیره نشد: $tagId'),
+            ),
+          );
+        }
 
-    if (showSnackBar) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('رکورد تکراری ذخیره نشد: $tagId'),
+        await UsbLogService.addLog(
+          type: UsbLogType.duplicate,
+          title: 'رکورد تکراری نادیده گرفته شد',
+          message: '$tagId / $jsonText',
+        );
+
+        return;
+      }
+
+      final camelProfile = await CamelProfileService.getOrCreateProfile(tagId);
+
+      final locationResult = await getLocationForRecord();
+
+      String finalLocationName = locationName;
+
+      if (locationResult.success) {
+        finalLocationName = '$locationName + GPS گوشی';
+      } else {
+        finalLocationName = '$locationName بدون GPS';
+
+        await UsbLogService.addLog(
+          type: UsbLogType.info,
+          title: 'GPS ثبت نشد',
+          message: locationResult.message,
+        );
+      }
+
+      final record = payload.toTagRecord(
+        locationName: finalLocationName,
+        camelNo: camelProfile.camelNo,
+        camelName: camelProfile.camelName,
+        latitude: locationResult.latitude,
+        longitude: locationResult.longitude,
+        accuracy: locationResult.accuracy,
+      );
+
+      setState(() {
+        lastUsbJson = jsonText.trim();
+        jsonController.text = jsonText.trim();
+        receivedRecords.insert(0, record);
+        usbStatus = isUsbConnected ? 'دریافت شد: ${record.tagId}' : usbStatus;
+      });
+
+      await LocalStorageService.addTagRecord(record);
+
+      await UsbLogService.addLog(
+        type: UsbLogType.received,
+        title: 'رکورد جدید ذخیره شد',
+        message: '${record.camelName} / ${record.tagId} / ${record.batteryText}',
+      );
+
+      await createAlertsForRecord(record);
+
+      if (!mounted) return;
+
+      if (showSnackBar) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('داده پردازش و ذخیره شد: ${record.tagId}'),
+          ),
+        );
+      }
+    } catch (e) {
+      final now = DateTime.now();
+      final hour = now.hour.toString().padLeft(2, '0');
+      final minute = now.minute.toString().padLeft(2, '0');
+
+      await AlertService.addAlert(
+        AppAlert(
+          id: 'json-error-${now.millisecondsSinceEpoch}',
+          title: 'خطای خواندن داده USB',
+          subtitle: 'JSON دریافتی از دستگاه معتبر نبود.',
+          time: '$hour:$minute',
+          locationName: 'دریافت USB',
+          type: AlertType.antennaError,
+          level: AlertLevel.warning,
+          messageSent: false,
+          reviewed: false,
         ),
       );
-    }
 
-    await UsbLogService.addLog(
-      type: UsbLogType.duplicate,
-      title: 'رکورد تکراری نادیده گرفته شد',
-      message: '$tagId / $jsonText',
-    );
-
-    return;
-  }
-
-  final camelProfile = await CamelProfileService.getOrCreateProfile(tagId);
-
-  final locationResult = await getLocationForRecord();
-
-  String finalLocationName = locationName;
-
-  if (locationResult.success) {
-    finalLocationName = '$locationName + GPS گوشی';
-  } else {
-    finalLocationName = '$locationName بدون GPS';
-
-    await UsbLogService.addLog(
-      type: UsbLogType.info,
-      title: 'GPS ثبت نشد',
-      message: locationResult.message,
-    );
-  }
-
-  final record = payload.toTagRecord(
-    locationName: finalLocationName,
-    camelNo: camelProfile.camelNo,
-    camelName: camelProfile.camelName,
-    latitude: locationResult.latitude,
-    longitude: locationResult.longitude,
-    accuracy: locationResult.accuracy,
-  );
-
-    setState(() {
-      lastUsbJson = jsonText.trim();
-      jsonController.text = jsonText.trim();
-      receivedRecords.insert(0, record);
-      usbStatus = isUsbConnected ? 'دریافت شد: ${record.tagId}' : usbStatus;
-    });
-
-    await LocalStorageService.addTagRecord(record);
-    await UsbLogService.addLog(
-      type: UsbLogType.received,
-      title: 'رکورد جدید ذخیره شد',
-      message: '${record.camelName} / ${record.tagId} / ${record.batteryText}',
-    );
-    await createAlertsForRecord(record);
-
-    if (!mounted)
-     return;
-
-    if (showSnackBar) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('داده پردازش و ذخیره شد: ${record.tagId}'),
-        ),
-      );
-    }
-  } catch (e) {
-  final now = DateTime.now();
-  final hour = now.hour.toString().padLeft(2, '0');
-  final minute = now.minute.toString().padLeft(2, '0');
-
-  await AlertService.addAlert(
-    AppAlert(
-      id: 'json-error-${now.millisecondsSinceEpoch}',
-      title: 'خطای خواندن داده USB',
-      subtitle: 'JSON دریافتی از دستگاه معتبر نبود.',
-      time: '$hour:$minute',
-      locationName: 'دریافت USB',
-      type: AlertType.antennaError,
-      level: AlertLevel.warning,
-      messageSent: false,
-      reviewed: false,
-    ),
-  );
-  await UsbLogService.addLog(
+      await UsbLogService.addLog(
         type: UsbLogType.invalidJson,
         title: 'خطا در خواندن JSON',
         message: '${e.toString()} / $jsonText',
       );
-    if (!mounted) return;
 
-    setState(() {
-      usbStatus = 'JSON نامعتبر';
-    });
+      if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('خطا در خواندن JSON: $e'),
-        backgroundColor: Colors.red,
-      ),
-    );
+      setState(() {
+        usbStatus = 'JSON نامعتبر';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطا در خواندن JSON: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
-}
 
   Future<void> processManualJson() async {
     await processJsonText(
@@ -755,120 +954,121 @@ Future<void> processJsonText(
     );
   }
 
+  Future<void> createAlertsForRecord(TagRecord record) async {
+    final now = DateTime.now();
+    final hour = now.hour.toString().padLeft(2, '0');
+    final minute = now.minute.toString().padLeft(2, '0');
+    final time = '$hour:$minute';
 
- Future<void> createAlertsForRecord(TagRecord record) async {
-   final now = DateTime.now();
-   final hour = now.hour.toString().padLeft(2, '0');
-   final minute = now.minute.toString().padLeft(2, '0');
-   final time = '$hour:$minute';
+    final alerts = <AppAlert>[];
 
-   final alerts = <AppAlert>[];
+    if (record.isBatteryLow) {
+      alerts.add(
+        AppAlert(
+          id: 'low-battery-${record.tagId}-${now.millisecondsSinceEpoch}',
+          title: 'باتری ضعیف',
+          subtitle:
+              '${record.camelName} با تگ ${record.tagId} باتری ${record.batteryText} دارد.',
+          time: time,
+          relatedTagId: record.tagId,
+          locationName: record.locationName,
+          type: AlertType.lowBattery,
+          level: AlertLevel.warning,
+          messageSent: false,
+          reviewed: false,
+        ),
+      );
+    }
 
-   if (record.isBatteryLow) {
-     alerts.add(
-       AppAlert(
-         id: 'low-battery-${record.tagId}-${now.millisecondsSinceEpoch}',
-         title: 'باتری ضعیف',
-         subtitle:
-             '${record.camelName} با تگ ${record.tagId} باتری ${record.batteryText} دارد.',
-         time: time,
-         relatedTagId: record.tagId,
-         locationName: record.locationName,
-         type: AlertType.lowBattery,
-         level: AlertLevel.warning,
-         messageSent: false,
-         reviewed: false,
-       ),
-     );
-   }
+    if (record.lock == 0) {
+      alerts.add(
+        AppAlert(
+          id: 'tag-unlocked-${record.tagId}-${now.millisecondsSinceEpoch}',
+          title: 'تگ از شتر باز شده',
+          subtitle:
+              '${record.camelName} با تگ ${record.tagId} وضعیت Lock = 0 دارد.',
+          time: time,
+          relatedTagId: record.tagId,
+          locationName: record.locationName,
+          type: AlertType.tagUnlocked,
+          level: AlertLevel.urgent,
+          messageSent: false,
+          reviewed: false,
+        ),
+      );
+    }
 
-   if (record.lock == 0) {
-     alerts.add(
-       AppAlert(
-         id: 'tag-unlocked-${record.tagId}-${now.millisecondsSinceEpoch}',
-         title: 'تگ از شتر باز شده',
-         subtitle:
-             '${record.camelName} با تگ ${record.tagId} وضعیت Lock = 0 دارد.',
-         time: time,
-         relatedTagId: record.tagId,
-         locationName: record.locationName,
-         type: AlertType.tagUnlocked,
-         level: AlertLevel.urgent,
-         messageSent: false,
-         reviewed: false,
-       ),
-     );
-   }
+    final zones = await AreaZoneService.loadZones();
 
-   final zones = await AreaZoneService.loadZones();
+    if (record.latitude != null && record.longitude != null && zones.isNotEmpty) {
+      final zoneResult = ZoneCheckService.checkRecord(
+        record: record,
+        zones: zones,
+      );
 
-   if (record.latitude != null && record.longitude != null && zones.isNotEmpty) {
-     final zoneResult = ZoneCheckService.checkRecord(
-       record: record,
-       zones: zones,
-     );
+      if (zoneResult.isInsideForbiddenZone) {
+        final zoneNames = zoneResult.forbiddenZones
+            .map((zone) => zone.name)
+            .join('، ');
 
-     if (zoneResult.isInsideForbiddenZone) {
-       final zoneNames = zoneResult.forbiddenZones
-           .map((zone) => zone.name)
-           .join('، ');
+        alerts.add(
+          AppAlert(
+            id: 'forbidden-zone-${record.tagId}-${now.millisecondsSinceEpoch}',
+            title: 'ورود به منطقه ممنوع',
+            subtitle:
+                '${record.camelName} با تگ ${record.tagId} وارد محدوده ممنوع «$zoneNames» شده است.',
+            time: time,
+            relatedTagId: record.tagId,
+            locationName: zoneNames,
+            type: AlertType.forbiddenZone,
+            level: AlertLevel.urgent,
+            messageSent: false,
+            reviewed: false,
+          ),
+        );
+      }
 
-       alerts.add(
-         AppAlert(
-           id: 'forbidden-zone-${record.tagId}-${now.millisecondsSinceEpoch}',
-           title: 'ورود به منطقه ممنوع',
-           subtitle:
-               '${record.camelName} با تگ ${record.tagId} وارد محدوده ممنوع «$zoneNames» شده است.',
-           time: time,
-           relatedTagId: record.tagId,
-           locationName: zoneNames,
-           type: AlertType.forbiddenZone,
-           level: AlertLevel.urgent,
-           messageSent: false,
-           reviewed: false,
-         ),
-       );
-     }
+      if (zoneResult.isOutsideAllowedZones) {
+        alerts.add(
+          AppAlert(
+            id: 'outside-zone-${record.tagId}-${now.millisecondsSinceEpoch}',
+            title: 'خروج از محدوده مجاز',
+            subtitle:
+                '${record.camelName} با تگ ${record.tagId} خارج از آغل، چراگاه، آبشخور یا مسیر تعریف‌شده قرار دارد.',
+            time: time,
+            relatedTagId: record.tagId,
+            locationName: record.locationName,
+            type: AlertType.routeExit,
+            level: AlertLevel.warning,
+            messageSent: false,
+            reviewed: false,
+          ),
+        );
+      }
+    }
 
-     if (zoneResult.isOutsideAllowedZones) {
-       alerts.add(
-         AppAlert(
-           id: 'outside-zone-${record.tagId}-${now.millisecondsSinceEpoch}',
-           title: 'خروج از محدوده مجاز',
-           subtitle:
-               '${record.camelName} با تگ ${record.tagId} خارج از آغل، چراگاه، آبشخور یا مسیر تعریف‌شده قرار دارد.',
-           time: time,
-           relatedTagId: record.tagId,
-           locationName: record.locationName,
-           type: AlertType.routeExit,
-           level: AlertLevel.warning,
-           messageSent: false,
-           reviewed: false,
-         ),
-       );
-     }
-   }
-
-   await AlertService.addAlerts(alerts);
- }
-
-
+    await AlertService.addAlerts(alerts);
+  }
 
   Future<void> saveAllReceivedRecords() async {
+    final todayRecords = getTodayRecords(receivedRecords);
+
     await LocalStorageService.saveTagRecords(receivedRecords);
 
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${receivedRecords.length} رکورد در حافظه محلی ذخیره شد.'),
+        content: Text('${todayRecords.length} رکورد امروز در حافظه محلی ثبت شد.'),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final lastRecord = receivedRecords.isNotEmpty ? receivedRecords.first : null;
+    super.build(context);
+
+    final todayRecords = getTodayRecords(receivedRecords);
 
     return SingleChildScrollView(
       child: Column(
@@ -893,8 +1093,8 @@ Future<void> processJsonText(
                           ),
                           Expanded(
                             child: MiniInfo(
-                              title: 'رکوردها',
-                              value: receivedRecords.length.toString(),
+                              title: 'رکورد امروز',
+                              value: todayRecords.length.toString(),
                             ),
                           ),
                           Expanded(
@@ -905,76 +1105,78 @@ Future<void> processJsonText(
                           ),
                         ],
                       ),
-                    const SizedBox(height: 10),
 
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: isUsbConnected
-                            ? const Color(0xFFEAF8F2)
-                            : const Color(0xFFFFF3E0),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
+                      const SizedBox(height: 10),
+
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
                           color: isUsbConnected
-                              ? const Color(0xFFB7E5D2)
-                              : const Color(0xFFFFCC80),
+                              ? const Color(0xFFEAF8F2)
+                              : const Color(0xFFFFF3E0),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isUsbConnected
+                                ? const Color(0xFFB7E5D2)
+                                : const Color(0xFFFFCC80),
+                          ),
+                        ),
+                        child: Text(
+                          'وضعیت USB: $usbStatus',
+                          style: TextStyle(
+                            color: isUsbConnected
+                                ? const Color(0xFF0A4F35)
+                                : const Color(0xFF8A4B00),
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                      child: Text(
-                        'وضعیت USB: $usbStatus',
-                        style: TextStyle(
-                          color: isUsbConnected
-                              ? const Color(0xFF0A4F35)
-                              : const Color(0xFF8A4B00),
-                          fontWeight: FontWeight.bold,
+
+                      const SizedBox(height: 10),
+
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isGettingLocation
+                              ? const Color(0xFFFFF3E0)
+                              : const Color(0xFFEAF8F2),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: isGettingLocation
-                            ? const Color(0xFFFFF3E0)
-                            : const Color(0xFFEAF8F2),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          if (isGettingLocation)
-                            const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          else
-                            Icon(
-                              lastLocationResult?.success == true
-                                  ? Icons.gps_fixed_rounded
-                                  : Icons.gps_not_fixed_rounded,
-                              color: lastLocationResult?.success == true
-                                  ? const Color(0xFF008B62)
-                                  : const Color(0xFFE87500),
-                            ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'GPS: $gpsStatus',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF062C5E),
+                        child: Row(
+                          children: [
+                            if (isGettingLocation)
+                              const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            else
+                              Icon(
+                                lastLocationResult?.success == true
+                                    ? Icons.gps_fixed_rounded
+                                    : Icons.gps_not_fixed_rounded,
+                                color: lastLocationResult?.success == true
+                                    ? const Color(0xFF008B62)
+                                    : const Color(0xFFE87500),
+                              ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'GPS: $gpsStatus',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF062C5E),
+                                ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
+
                       if (lastUsbJson != '-') ...[
                         const SizedBox(height: 10),
                         Container(
@@ -999,7 +1201,9 @@ Future<void> processJsonText(
                           ),
                         ),
                       ],
+
                       const SizedBox(height: 12),
+
                       Row(
                         children: [
                           Expanded(
@@ -1027,8 +1231,7 @@ Future<void> processJsonText(
                                 foregroundColor: Colors.white,
                                 disabledBackgroundColor: Colors.grey.shade300,
                                 disabledForegroundColor: Colors.grey.shade600,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 14),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(14),
                                 ),
@@ -1047,8 +1250,7 @@ Future<void> processJsonText(
                                 foregroundColor: Colors.white,
                                 disabledBackgroundColor: Colors.grey.shade300,
                                 disabledForegroundColor: Colors.grey.shade600,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 14),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(14),
                                 ),
@@ -1060,7 +1262,9 @@ Future<void> processJsonText(
                     ],
                   ),
                 ),
+
                 const SizedBox(height: 14),
+
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: cardDecoration(),
@@ -1106,19 +1310,36 @@ Future<void> processJsonText(
                     ],
                   ),
                 ),
+
                 const SizedBox(height: 14),
+
                 Container(
                   decoration: cardDecoration(),
                   child: Column(
                     children: [
-                      const SectionTitle(title: 'تگ‌های دریافت‌شده اخیر'),
-                      ...receivedRecords
-                          .take(8)
-                          .map((record) => RecentTagRow(record: record)),
+                      const SectionTitle(title: 'تگ‌های دریافت‌شده امروز'),
+                      if (todayRecords.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text(
+                            'امروز هنوز رکوردی دریافت نشده است.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.black54,
+                              height: 1.7,
+                            ),
+                          ),
+                        )
+                      else
+                        ...todayRecords
+                            .take(8)
+                            .map((record) => RecentTagRow(record: record)),
                     ],
                   ),
                 ),
+
                 const SizedBox(height: 16),
+
                 SizedBox(
                   width: double.infinity,
                   height: 54,
@@ -1133,7 +1354,7 @@ Future<void> processJsonText(
                     onPressed: saveAllReceivedRecords,
                     icon: const Icon(Icons.download_rounded),
                     label: Text(
-                      'ثبت و ذخیره ${receivedRecords.length} رکورد',
+                      'ثبت و ذخیره ${todayRecords.length} رکورد امروز',
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -1149,6 +1370,10 @@ Future<void> processJsonText(
     );
   }
 }
+
+
+
+
 class TagDetailPage extends StatefulWidget {
   final TagRecord record;
 
@@ -1551,31 +1776,74 @@ class _MapPageState extends State<MapPage> {
   List<TagRecord> records = [];
   List<AreaZone> zones = [];
 
+  Timer? mapRefreshTimer;
+
   @override
   void initState() {
     super.initState();
+
     loadRecords();
+
+    mapRefreshTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) {
+        if (!mounted) return;
+        setState(() {});
+      },
+    );
   }
 
- Future<void> loadRecords() async {
-   final loadedRecords = await LocalStorageService.loadTagRecords();
-   final loadedZones = await AreaZoneService.loadZones();
+  @override
+  void dispose() {
+    mapRefreshTimer?.cancel();
+    super.dispose();
+  }
 
-   if (!mounted) return;
+  Future<void> loadRecords() async {
+    final loadedRecords = await LocalStorageService.loadTagRecords();
+    final loadedZones = await AreaZoneService.loadZones();
 
-   setState(() {
-     records = loadedRecords;
-     zones = loadedZones;
-     isLoading = false;
-   });
- }
+    if (!mounted) return;
+
+    setState(() {
+      records = loadedRecords;
+      zones = loadedZones;
+      isLoading = false;
+    });
+  }
 
   bool hasGps(TagRecord record) {
     return record.latitude != null && record.longitude != null;
   }
 
+  DateTime? recordDateTime(TagRecord record) {
+    final text = record.receivedDateTime.trim();
+
+    if (text.isEmpty) return null;
+
+    return DateTime.tryParse(text);
+  }
+
+  bool isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  List<TagRecord> getTodayRecords(List<TagRecord> source) {
+    final now = DateTime.now();
+
+    return source.where((record) {
+      final parsed = recordDateTime(record);
+
+      if (parsed == null) return false;
+
+      return isSameDay(parsed, now);
+    }).toList();
+  }
+
   List<TagRecord> get gpsRecords {
-    return records.where(hasGps).toList();
+    final todayRecords = getTodayRecords(records);
+
+    return todayRecords.where(hasGps).toList();
   }
 
   List<TagRecord> get latestGpsRecordsByTag {
@@ -1610,6 +1878,7 @@ class _MapPageState extends State<MapPage> {
   Widget build(BuildContext context) {
     final gpsList = latestGpsRecordsByTag;
     final activeMapZones = zones.where((zone) => zone.isActive).toList();
+
     final allGpsCount = gpsRecords.length;
     final uniqueCamelCount = gpsList.length;
 
@@ -1643,7 +1912,7 @@ class _MapPageState extends State<MapPage> {
                                 children: [
                                   Expanded(
                                     child: MapSummaryCard(
-                                      title: 'رکورد GPS',
+                                      title: 'GPS امروز',
                                       value: allGpsCount.toString(),
                                       icon: Icons.gps_fixed_rounded,
                                       color: const Color(0xFF086EBB),
@@ -1660,7 +1929,9 @@ class _MapPageState extends State<MapPage> {
                                   ),
                                 ],
                               ),
+
                               const SizedBox(height: 10),
+
                               Row(
                                 children: [
                                   Expanded(
@@ -1682,7 +1953,9 @@ class _MapPageState extends State<MapPage> {
                                   ),
                                 ],
                               ),
+
                               const SizedBox(height: 14),
+
                               Container(
                                 padding: const EdgeInsets.all(14),
                                 decoration: cardDecoration(),
@@ -1698,7 +1971,7 @@ class _MapPageState extends State<MapPage> {
                                         const SizedBox(width: 8),
                                         const Expanded(
                                           child: Text(
-                                            'نمای ساده موقعیت‌ها',
+                                            'نمای ساده موقعیت‌های امروز',
                                             style: TextStyle(
                                               fontWeight: FontWeight.bold,
                                               fontSize: 16,
@@ -1715,7 +1988,9 @@ class _MapPageState extends State<MapPage> {
                                         ),
                                       ],
                                     ),
+
                                     const SizedBox(height: 10),
+
                                     SizedBox(
                                       width: double.infinity,
                                       child: OutlinedButton.icon(
@@ -1732,56 +2007,63 @@ class _MapPageState extends State<MapPage> {
                                         label: const Text('مدیریت محدوده‌ها'),
                                       ),
                                     ),
+
                                     const SizedBox(height: 10),
-                                   if (gpsList.isEmpty && activeMapZones.isEmpty)
-                                     Container(
-                                       width: double.infinity,
-                                       padding: const EdgeInsets.all(18),
-                                       decoration: BoxDecoration(
-                                         color: const Color(0xFFFFF3E0),
-                                         borderRadius: BorderRadius.circular(16),
-                                       ),
-                                       child: const Column(
-                                         children: [
-                                           Icon(
-                                             Icons.gps_not_fixed_rounded,
-                                             size: 54,
-                                             color: Color(0xFFE87500),
-                                           ),
-                                           SizedBox(height: 12),
-                                           Text(
-                                             'هنوز موقعیت یا محدوده‌ای ثبت نشده است.',
-                                             style: TextStyle(
-                                               fontWeight: FontWeight.bold,
-                                               fontSize: 16,
-                                             ),
-                                           ),
-                                           SizedBox(height: 8),
-                                           Text(
-                                             'Location گوشی را روشن کن و از صفحه دریافت یک JSON پردازش کن یا از مدیریت محدوده‌ها یک محدوده بساز.',
-                                             textAlign: TextAlign.center,
-                                             style: TextStyle(
-                                               color: Colors.black54,
-                                               height: 1.7,
-                                             ),
-                                           ),
-                                         ],
-                                       ),
-                                     )
-                                   else
-                                     SimpleGpsMap(
-                                       records: gpsList,
-                                       zones: activeMapZones,
-                                     ),
+
+                                    if (gpsList.isEmpty &&
+                                        activeMapZones.isEmpty)
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(18),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFFFF3E0),
+                                          borderRadius:
+                                              BorderRadius.circular(16),
+                                        ),
+                                        child: const Column(
+                                          children: [
+                                            Icon(
+                                              Icons.gps_not_fixed_rounded,
+                                              size: 54,
+                                              color: Color(0xFFE87500),
+                                            ),
+                                            SizedBox(height: 12),
+                                            Text(
+                                              'امروز هنوز موقعیت یا محدوده‌ای ثبت نشده است.',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 16,
+                                              ),
+                                            ),
+                                            SizedBox(height: 8),
+                                            Text(
+                                              'Location گوشی را روشن کن و از صفحه دریافت یک JSON پردازش کن یا از مدیریت محدوده‌ها یک محدوده بساز.',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                color: Colors.black54,
+                                                height: 1.7,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    else
+                                      SimpleGpsMap(
+                                        records: gpsList,
+                                        zones: activeMapZones,
+                                      ),
                                   ],
                                 ),
                               ),
+
                               const SizedBox(height: 14),
+
                               Row(
                                 children: [
                                   const Expanded(
                                     child: Text(
-                                      'آخرین موقعیت شترها',
+                                      'آخرین موقعیت شترهای امروز',
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 16,
@@ -1798,13 +2080,15 @@ class _MapPageState extends State<MapPage> {
                                   ),
                                 ],
                               ),
+
                               const SizedBox(height: 10),
+
                               if (gpsList.isEmpty)
                                 Container(
                                   padding: const EdgeInsets.all(18),
                                   decoration: cardDecoration(),
                                   child: const Text(
-                                    'رکوردی برای نمایش در نقشه وجود ندارد.',
+                                    'امروز رکورد GPS برای نمایش در نقشه وجود ندارد.',
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
                                       color: Colors.black54,
@@ -1813,13 +2097,14 @@ class _MapPageState extends State<MapPage> {
                                   ),
                                 )
                               else
-                               ...gpsList.map(
-                                 (record) => GpsRecordCard(
-                                   record: record,
-                                   dateText: recordDateText(record),
-                                   zones: activeMapZones,
-                                 ),
-                               ),
+                                ...gpsList.map(
+                                  (record) => GpsRecordCard(
+                                    record: record,
+                                    dateText: recordDateText(record),
+                                    zones: activeMapZones,
+                                  ),
+                                ),
+
                               const SizedBox(height: 40),
                             ],
                           ),
@@ -1833,7 +2118,6 @@ class _MapPageState extends State<MapPage> {
     );
   }
 }
-
 
 class MapSummaryCard extends StatelessWidget {
   final String title;
@@ -1905,8 +2189,8 @@ class SimpleGpsMap extends StatefulWidget {
 }
 
 class _SimpleGpsMapState extends State<SimpleGpsMap> {
-  static const double sceneWidth = 900;
-  static const double sceneHeight = 620;
+  static const double sceneWidth = 1200;
+  static const double sceneHeight = 820;
 
   final TransformationController transformationController =
       TransformationController();
@@ -1946,7 +2230,9 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
   }
 
   List<TagRecord> get mapRecords {
-    return widget.records.take(50).toList();
+    return widget.records.where((record) {
+      return record.latitude != null && record.longitude != null;
+    }).take(50).toList();
   }
 
   List<AreaZone> get activeZones {
@@ -1969,12 +2255,59 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
         a.receivedTime == b.receivedTime;
   }
 
-  _GpsBounds boundsForMap() {
+  double metersToLatitudeDegree(double meters) {
+    return meters / 111320.0;
+  }
+
+  double metersToLongitudeDegree({
+    required double meters,
+    required double latitude,
+  }) {
+    final latitudeRadians = latitude * math.pi / 180.0;
+    final metersPerDegree = 111320.0 * math.cos(latitudeRadians).abs();
+
+    if (metersPerDegree < 1) {
+      return meters / 111320.0;
+    }
+
+    return meters / metersPerDegree;
+  }
+
+  List<_GpsPoint> zoneBoundaryPoints(AreaZone zone) {
+    final latDelta = metersToLatitudeDegree(zone.radiusMeters);
+    final lngDelta = metersToLongitudeDegree(
+      meters: zone.radiusMeters,
+      latitude: zone.centerLatitude,
+    );
+
+    return [
+      _GpsPoint(
+        latitude: zone.centerLatitude,
+        longitude: zone.centerLongitude,
+      ),
+      _GpsPoint(
+        latitude: zone.centerLatitude + latDelta,
+        longitude: zone.centerLongitude,
+      ),
+      _GpsPoint(
+        latitude: zone.centerLatitude - latDelta,
+        longitude: zone.centerLongitude,
+      ),
+      _GpsPoint(
+        latitude: zone.centerLatitude,
+        longitude: zone.centerLongitude + lngDelta,
+      ),
+      _GpsPoint(
+        latitude: zone.centerLatitude,
+        longitude: zone.centerLongitude - lngDelta,
+      ),
+    ];
+  }
+
+  List<_GpsPoint> mapBoundaryPoints() {
     final points = <_GpsPoint>[];
 
     for (final record in mapRecords) {
-      if (record.latitude == null || record.longitude == null) continue;
-
       points.add(
         _GpsPoint(
           latitude: record.latitude!,
@@ -1984,20 +2317,21 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
     }
 
     for (final zone in activeZones) {
-      points.add(
-        _GpsPoint(
-          latitude: zone.centerLatitude,
-          longitude: zone.centerLongitude,
-        ),
-      );
+      points.addAll(zoneBoundaryPoints(zone));
     }
+
+    return points;
+  }
+
+  _GpsBounds boundsForMap() {
+    final points = mapBoundaryPoints();
 
     if (points.isEmpty) {
       return const _GpsBounds(
-        minLat: 0,
-        maxLat: 1,
-        minLng: 0,
-        maxLng: 1,
+        minLat: 35.0,
+        maxLat: 36.0,
+        minLng: 51.0,
+        maxLng: 52.0,
       );
     }
 
@@ -2013,22 +2347,12 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
       if (point.longitude > maxLng) maxLng = point.longitude;
     }
 
-    if ((maxLat - minLat).abs() < 0.000001) {
-      maxLat += 0.0005;
-      minLat -= 0.0005;
-    }
-
-    if ((maxLng - minLng).abs() < 0.000001) {
-      maxLng += 0.0005;
-      minLng -= 0.0005;
-    }
-
     return _GpsBounds(
       minLat: minLat,
       maxLat: maxLat,
       minLng: minLng,
       maxLng: maxLng,
-    );
+    ).withPadding(0.25);
   }
 
   Offset positionForLatLng({
@@ -2037,15 +2361,16 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
   }) {
     final bounds = boundsForMap();
 
-    const margin = 70.0;
+    const margin = 90.0;
+
+    final usableWidth = sceneWidth - margin * 2;
+    final usableHeight = sceneHeight - margin * 2;
 
     final x = margin +
-        ((longitude - bounds.minLng) / (bounds.maxLng - bounds.minLng)) *
-            (sceneWidth - margin * 2);
+        ((longitude - bounds.minLng) / bounds.lngRange) * usableWidth;
 
     final y = margin +
-        ((bounds.maxLat - latitude) / (bounds.maxLat - bounds.minLat)) *
-            (sceneHeight - margin * 2);
+        ((bounds.maxLat - latitude) / bounds.latRange) * usableHeight;
 
     return Offset(x, y);
   }
@@ -2078,12 +2403,11 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
       longitude: zone.centerLongitude,
     );
 
-    final latOffset = zone.radiusMeters / 111320.0;
-
-    final cosLat = math.cos(zone.centerLatitude * math.pi / 180).abs();
-    final safeCosLat = cosLat < 0.1 ? 0.1 : cosLat;
-
-    final lngOffset = zone.radiusMeters / (111320.0 * safeCosLat);
+    final latOffset = metersToLatitudeDegree(zone.radiusMeters);
+    final lngOffset = metersToLongitudeDegree(
+      meters: zone.radiusMeters,
+      latitude: zone.centerLatitude,
+    );
 
     final northPoint = positionForLatLng(
       latitude: zone.centerLatitude + latOffset,
@@ -2098,7 +2422,7 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
     final radiusY = (northPoint.dy - center.dy).abs();
     final radiusX = (eastPoint.dx - center.dx).abs();
 
-    return ((radiusX + radiusY) / 2).clamp(32.0, 260.0).toDouble();
+    return ((radiusX + radiusY) / 2).clamp(18.0, 520.0).toDouble();
   }
 
   Widget buildZoneShape(AreaZone zone) {
@@ -2127,13 +2451,13 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
           ),
           child: Center(
             child: Container(
-              constraints: const BoxConstraints(maxWidth: 120),
+              constraints: const BoxConstraints(maxWidth: 140),
               padding: const EdgeInsets.symmetric(
                 horizontal: 8,
                 vertical: 5,
               ),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.9),
+                color: Colors.white.withOpacity(0.92),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
@@ -2163,7 +2487,7 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
     final scaleX = size.width / sceneWidth;
     final scaleY = size.height / sceneHeight;
     final baseScale = scaleX < scaleY ? scaleX : scaleY;
-    final scale = baseScale * 0.92;
+    final scale = baseScale * 0.96;
 
     final dx = (size.width - sceneWidth * scale) / 2;
     final dy = (size.height - sceneHeight * scale) / 2;
@@ -2209,7 +2533,7 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
     if (viewportSize.width <= 0 || viewportSize.height <= 0) return;
 
     final currentScale = transformationController.value.getMaxScaleOnAxis();
-    final nextScale = (currentScale * factor).clamp(0.35, 5.0).toDouble();
+    final nextScale = (currentScale * factor).clamp(0.25, 6.0).toDouble();
 
     final center = Offset(
       viewportSize.width / 2,
@@ -2534,14 +2858,15 @@ class _SimpleGpsMapState extends State<SimpleGpsMap> {
                     clipBehavior: Clip.hardEdge,
                     child: InteractiveViewer(
                       transformationController: transformationController,
-                      minScale: 0.35,
-                      maxScale: 5,
-                      boundaryMargin: const EdgeInsets.all(500),
+                      minScale: 0.25,
+                      maxScale: 6,
+                      boundaryMargin: const EdgeInsets.all(900),
                       constrained: false,
                       child: SizedBox(
                         width: sceneWidth,
                         height: sceneHeight,
                         child: Stack(
+                          clipBehavior: Clip.none,
                           children: [
                             Positioned.fill(
                               child: CustomPaint(
@@ -2641,8 +2966,31 @@ class _GpsBounds {
     required this.minLng,
     required this.maxLng,
   });
-}
 
+  double get latRange {
+    final value = maxLat - minLat;
+    if (value.abs() < 0.000001) return 0.000001;
+    return value;
+  }
+
+  double get lngRange {
+    final value = maxLng - minLng;
+    if (value.abs() < 0.000001) return 0.000001;
+    return value;
+  }
+
+  _GpsBounds withPadding(double percent) {
+    final latPad = latRange * percent;
+    final lngPad = lngRange * percent;
+
+    return _GpsBounds(
+      minLat: minLat - latPad,
+      maxLat: maxLat + latPad,
+      minLng: minLng - lngPad,
+      maxLng: maxLng + lngPad,
+    );
+  }
+}
 
 class _GpsPoint {
   final double latitude;
@@ -2700,8 +3048,8 @@ class _MapGridOnlyPainter extends CustomPainter {
       ..color = const Color(0xFFBFD4EF)
       ..strokeWidth = 1;
 
-    for (var i = 1; i < 9; i++) {
-      final dx = size.width * i / 9;
+    for (var i = 1; i < 12; i++) {
+      final dx = size.width * i / 12;
 
       canvas.drawLine(
         Offset(dx, 0),
@@ -2710,8 +3058,8 @@ class _MapGridOnlyPainter extends CustomPainter {
       );
     }
 
-    for (var i = 1; i < 7; i++) {
-      final dy = size.height * i / 7;
+    for (var i = 1; i < 9; i++) {
+      final dy = size.height * i / 9;
 
       canvas.drawLine(
         Offset(0, dy),
@@ -6507,12 +6855,50 @@ class _AlertsPageState extends State<AlertsPage> {
   Future<void> loadAlerts() async {
     final loadedAlerts = await AlertService.loadAlerts();
 
+    await AlertService.refreshUnreviewedCount();
+
     if (!mounted) return;
 
     setState(() {
       alerts = loadedAlerts;
       isLoading = false;
     });
+  }
+
+  Future<void> markAlertReviewed(AppAlert alert) async {
+    if (alert.reviewed) return;
+
+    await AlertService.markReviewed(alert.id);
+
+    if (!mounted) return;
+
+    setState(() {
+      alerts = alerts.map((item) {
+        if (item.id == alert.id) {
+          return item.copyWith(reviewed: true);
+        }
+
+        return item;
+      }).toList();
+    });
+  }
+
+  Future<void> markAllReviewed() async {
+    await AlertService.markAllReviewed();
+
+    if (!mounted) return;
+
+    setState(() {
+      alerts = alerts.map((alert) {
+        return alert.copyWith(reviewed: true);
+      }).toList();
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('همه هشدارها دیده شدند.'),
+      ),
+    );
   }
 
   Future<void> clearAlerts() async {
@@ -6533,13 +6919,23 @@ class _AlertsPageState extends State<AlertsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final urgentCount =
-        alerts.where((a) => a.level == AlertLevel.urgent).length;
+    final activeAlerts = alerts.where((alert) {
+      return alert.reviewed == false;
+    }).toList();
 
-    final lowBatteryCount =
-        alerts.where((a) => a.type == AlertType.lowBattery).length;
+    final urgentCount = activeAlerts.where((a) {
+      return a.level == AlertLevel.urgent;
+    }).length;
 
-    final unsentCount = alerts.where((a) => !a.messageSent).length;
+    final lowBatteryCount = activeAlerts.where((a) {
+      return a.type == AlertType.lowBattery;
+    }).length;
+
+    final unsentCount = activeAlerts.where((a) {
+      return !a.messageSent;
+    }).length;
+
+    final unreviewedCount = activeAlerts.length;
 
     return SingleChildScrollView(
       child: Column(
@@ -6571,35 +6967,54 @@ class _AlertsPageState extends State<AlertsPage> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: AlertSummaryCard(
-                        title: 'ارسال نشده',
-                        value: unsentCount.toString(),
-                        icon: Icons.sms_failed_rounded,
+                        title: 'دیده‌نشده',
+                        value: unreviewedCount.toString(),
+                        icon: Icons.visibility_off_rounded,
                         color: const Color(0xFF086EBB),
                       ),
                     ),
                   ],
                 ),
+
                 const SizedBox(height: 14),
+
                 Row(
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: loadAlerts,
                         icon: const Icon(Icons.refresh_rounded),
-                        label: const Text('بارگذاری مجدد'),
+                        label: const Text('بارگذاری'),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: alerts.isEmpty ? null : clearAlerts,
-                        icon: const Icon(Icons.delete_outline_rounded),
-                        label: const Text('پاک‌سازی'),
+                        onPressed:
+                            alerts.isEmpty ? null : markAllReviewed,
+                        icon: const Icon(Icons.done_all_rounded),
+                        label: const Text('سین همه'),
                       ),
                     ),
                   ],
                 ),
+
+                const SizedBox(height: 10),
+
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: alerts.isEmpty ? null : clearAlerts,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('پاک‌سازی هشدارها'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFD32F2F),
+                    ),
+                  ),
+                ),
+
                 const SizedBox(height: 14),
+
                 if (isLoading)
                   const Padding(
                     padding: EdgeInsets.all(24),
@@ -6627,7 +7042,7 @@ class _AlertsPageState extends State<AlertsPage> {
                         ),
                         SizedBox(height: 6),
                         Text(
-                          'اگر باتری ضعیف باشد یا Lock برابر ۰ شود، هشدار اینجا نمایش داده می‌شود.',
+                          'اگر باتری ضعیف باشد، تگ باز شود یا شتر از محدوده خارج شود، هشدار اینجا نمایش داده می‌شود.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: Colors.black54,
@@ -6638,7 +7053,17 @@ class _AlertsPageState extends State<AlertsPage> {
                     ),
                   )
                 else
-                  ...alerts.map((alert) => AlertCard(alert: alert)),
+                  ...alerts.map(
+                    (alert) => GestureDetector(
+                      onTap: () {
+                        markAlertReviewed(alert);
+                      },
+                      child: Opacity(
+                        opacity: alert.reviewed ? 0.55 : 1,
+                        child: AlertCard(alert: alert),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -6647,7 +7072,6 @@ class _AlertsPageState extends State<AlertsPage> {
     );
   }
 }
-
 
 class MorePage extends StatelessWidget {
   const MorePage({super.key});
