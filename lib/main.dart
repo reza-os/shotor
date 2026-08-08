@@ -7,6 +7,11 @@ import 'dart:math' as math;
 import 'models/area_zone.dart';
 import 'services/area_zone_service.dart';
 
+import 'services/sms_auto_sender_service.dart';
+import 'models/sms_report_settings.dart';
+import 'services/sms_report_settings_service.dart';
+import 'services/sms_report_builder_service.dart';
+import 'services/direct_sms_service.dart';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -129,6 +134,7 @@ class _SarabanShellState extends State<SarabanShell> {
     super.initState();
 
     AlertService.refreshUnreviewedCount();
+    SmsAutoSenderService.start();
   }
 
   @override
@@ -7267,6 +7273,25 @@ class MorePage extends StatelessWidget {
                                 showAboutProject(context);
                               },
                             ),
+                            ListTile(
+                              leading: const CircleAvatar(
+                                backgroundColor: Color(0xFFFFF3E0),
+                                child: Icon(Icons.sms_rounded, color: Color(0xFFE87500)),
+                              ),
+                              title: const Text(
+                                'تنظیمات پیامک',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: const Text('شماره مقصد، تایمر ارسال و متن گزارش پیامکی'),
+                              trailing: const Icon(Icons.chevron_left_rounded),
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const SmsReportSettingsPage(),
+                                  ),
+                                );
+                              },
+                            ),
                           ],
                         ),
                       ),
@@ -10474,6 +10499,545 @@ class LocationService {
       longitude: position.longitude,
       accuracy: position.accuracy,
       message: 'GPS ثبت شد با دقت ${position.accuracy.toStringAsFixed(1)} متر',
+    );
+  }
+}
+
+
+class SmsReportSettingsPage extends StatefulWidget {
+  const SmsReportSettingsPage({super.key});
+
+  @override
+  State<SmsReportSettingsPage> createState() => _SmsReportSettingsPageState();
+}
+
+class _SmsReportSettingsPageState extends State<SmsReportSettingsPage> {
+  bool isLoading = true;
+  bool isSendingTest = false;
+
+  SmsReportSettings settings = const SmsReportSettings();
+
+  final TextEditingController phoneController = TextEditingController();
+
+  final List<int> intervalOptions = const [
+    10,
+    15,
+    30,
+    60,
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    loadSettings();
+  }
+
+  @override
+  void dispose() {
+    phoneController.dispose();
+    super.dispose();
+  }
+
+  Future<void> loadSettings() async {
+    final loadedSettings = await SmsReportSettingsService.loadSettings();
+
+    if (!mounted) return;
+
+    setState(() {
+      settings = loadedSettings;
+      phoneController.text = loadedSettings.phoneNumber;
+      isLoading = false;
+    });
+  }
+
+  Future<void> saveSettings(SmsReportSettings newSettings) async {
+    settings = newSettings.copyWith(
+      phoneNumber: phoneController.text.trim(),
+    );
+
+    await SmsReportSettingsService.saveSettings(settings);
+    await SmsAutoSenderService.restart();
+
+    if (!mounted) return;
+
+    setState(() {});
+  }
+
+  Future<void> saveAndShowMessage() async {
+    await saveSettings(settings);
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('تنظیمات پیامک ذخیره شد.'),
+      ),
+    );
+  }
+
+  Future<void> sendTestSms() async {
+    await saveSettings(settings);
+
+    if (settings.phoneNumber.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('اول شماره مقصد را وارد کن.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      isSendingTest = true;
+    });
+
+    try {
+      final message = await SmsReportBuilderService.buildCurrentMessage(
+        settings,
+      );
+
+      await DirectSmsService.sendDirectSms(
+        phoneNumber: settings.phoneNumber,
+        message: message,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('پیامک تستی ارسال شد.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطا در ارسال پیامک: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (!mounted) return;
+
+      setState(() {
+        isSendingTest = false;
+      });
+    }
+  }
+
+  Future<void> showPreviewMessage() async {
+    await saveSettings(settings);
+
+    final message = await SmsReportBuilderService.buildCurrentMessage(
+      settings,
+    );
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('پیش‌نمایش پیامک'),
+          content: SingleChildScrollView(
+            child: Text(
+              message,
+              textDirection: TextDirection.rtl,
+              style: const TextStyle(height: 1.7),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Clipboard.setData(
+                  ClipboardData(text: message),
+                );
+
+                Navigator.of(context).pop();
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('متن پیامک کپی شد.'),
+                  ),
+                );
+              },
+              child: const Text('کپی متن'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('بستن'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget buildSwitchTile({
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return SwitchListTile(
+      value: value,
+      activeColor: const Color(0xFF008B62),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: const TextStyle(height: 1.5),
+      ),
+      onChanged: (value) async {
+        onChanged(value);
+        await saveSettings(settings);
+      },
+    );
+  }
+
+  Widget buildIntervalSelector() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionTitle(title: 'فاصله ارسال خودکار'),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: intervalOptions.map((minute) {
+              final selected = settings.intervalMinutes == minute;
+
+              return ChoiceChip(
+                selected: selected,
+                label: Text('هر $minute دقیقه'),
+                selectedColor: const Color(0xFFEAF8F2),
+                onSelected: (_) async {
+                  setState(() {
+                    settings = settings.copyWith(
+                      intervalMinutes: minute,
+                    );
+                  });
+
+                  await saveSettings(settings);
+                },
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'ارسال خودکار فعلاً وقتی برنامه باز است فعال می‌ماند.',
+            style: TextStyle(
+              color: Colors.black54,
+              height: 1.6,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildStatusBox() {
+    return ValueListenableBuilder<String>(
+      valueListenable: SmsAutoSenderService.statusNotifier,
+      builder: (context, status, child) {
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: settings.enabled
+                ? const Color(0xFFEAF8F2)
+                : const Color(0xFFFFF3E0),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: settings.enabled
+                  ? const Color(0xFFC8EBDD)
+                  : const Color(0xFFFFCC80),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                settings.enabled
+                    ? Icons.sms_rounded
+                    : Icons.sms_failed_rounded,
+                color: settings.enabled
+                    ? const Color(0xFF008B62)
+                    : const Color(0xFFE87500),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  status,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget buildContentOptions() {
+    return Container(
+      width: double.infinity,
+      decoration: cardDecoration(),
+      child: Column(
+        children: [
+          const SectionTitle(title: 'محتوای پیامک'),
+          buildSwitchTile(
+            title: 'تاریخ گزارش',
+            subtitle: 'نمایش روز و تاریخ در متن پیامک',
+            value: settings.includeDate,
+            onChanged: (value) {
+              setState(() {
+                settings = settings.copyWith(includeDate: value);
+              });
+            },
+          ),
+          buildSwitchTile(
+            title: 'تعداد شترهای دیده‌شده',
+            subtitle: 'تعداد تگ‌هایی که امروز دریافت شده‌اند',
+            value: settings.includeSeenCount,
+            onChanged: (value) {
+              setState(() {
+                settings = settings.copyWith(includeSeenCount: value);
+              });
+            },
+          ),
+          buildSwitchTile(
+            title: 'تعداد شترهای دیده‌نشده',
+            subtitle: 'شترهای فعال که امروز رکوردی نداشته‌اند',
+            value: settings.includeMissingCount,
+            onChanged: (value) {
+              setState(() {
+                settings = settings.copyWith(includeMissingCount: value);
+              });
+            },
+          ),
+          buildSwitchTile(
+            title: 'داخل محدوده مجاز',
+            subtitle: 'شترهای دیده‌شده داخل آغل، چراگاه، مسیر یا آبشخور',
+            value: settings.includeInsideAllowedCount,
+            onChanged: (value) {
+              setState(() {
+                settings = settings.copyWith(includeInsideAllowedCount: value);
+              });
+            },
+          ),
+          buildSwitchTile(
+            title: 'خارج یا غیرمجاز',
+            subtitle: 'شترهای خارج از محدوده مجاز یا داخل محدوده ممنوع',
+            value: settings.includeOutsideAllowedCount,
+            onChanged: (value) {
+              setState(() {
+                settings = settings.copyWith(includeOutsideAllowedCount: value);
+              });
+            },
+          ),
+          buildSwitchTile(
+            title: 'باتری ضعیف',
+            subtitle: 'تعداد شترهایی که باتری تگ آن‌ها ضعیف است',
+            value: settings.includeLowBatteryCount,
+            onChanged: (value) {
+              setState(() {
+                settings = settings.copyWith(includeLowBatteryCount: value);
+              });
+            },
+          ),
+          buildSwitchTile(
+            title: 'آخرین زمان دریافت',
+            subtitle: 'آخرین ساعت دریافت رکورد امروز',
+            value: settings.includeLastReceiveTime,
+            onChanged: (value) {
+              setState(() {
+                settings = settings.copyWith(includeLastReceiveTime: value);
+              });
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildMainSettings() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: cardDecoration(),
+      child: Column(
+        children: [
+          SwitchListTile(
+            value: settings.enabled,
+            activeColor: const Color(0xFF008B62),
+            title: const Text(
+              'ارسال خودکار پیامک',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: const Text(
+              'با فعال‌سازی، برنامه طبق تایمر تنظیم‌شده پیامک گزارش ارسال می‌کند.',
+              style: TextStyle(height: 1.5),
+            ),
+            onChanged: (value) async {
+              setState(() {
+                settings = settings.copyWith(enabled: value);
+              });
+
+              await saveSettings(settings);
+            },
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: phoneController,
+            keyboardType: TextInputType.phone,
+            textDirection: TextDirection.ltr,
+            decoration: InputDecoration(
+              labelText: 'شماره مقصد پیامک',
+              hintText: 'مثلاً 09123456789',
+              prefixIcon: const Icon(Icons.phone_rounded),
+              filled: true,
+              fillColor: const Color(0xFFF5F7FA),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide.none,
+              ),
+            ),
+            onChanged: (value) {
+              settings = settings.copyWith(
+                phoneNumber: value.trim(),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          SwitchListTile(
+            value: settings.sendOnlyIfHasProblem,
+            activeColor: const Color(0xFF008B62),
+            title: const Text(
+              'ارسال فقط در صورت وجود مشکل',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: const Text(
+              'مثلاً شتر دیده‌نشده، خارج محدوده یا باتری ضعیف',
+              style: TextStyle(height: 1.5),
+            ),
+            onChanged: (value) async {
+              setState(() {
+                settings = settings.copyWith(
+                  sendOnlyIfHasProblem: value,
+                );
+              });
+
+              await saveSettings(settings);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildActionButtons() {
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: ElevatedButton.icon(
+            onPressed: saveAndShowMessage,
+            icon: const Icon(Icons.save_rounded),
+            label: const Text('ذخیره تنظیمات'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF003B7A),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: showPreviewMessage,
+                icon: const Icon(Icons.remove_red_eye_rounded),
+                label: const Text('پیش‌نمایش'),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: isSendingTest ? null : sendTestSms,
+                icon: isSendingTest
+                    ? const SizedBox(
+                        width: 17,
+                        height: 17,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.send_rounded),
+                label: const Text('ارسال تستی'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF008B62),
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF5F7FA),
+        body: Column(
+          children: [
+            const AppHeader(title: 'تنظیمات پیامک'),
+            Expanded(
+              child: isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : SingleChildScrollView(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        children: [
+                          buildStatusBox(),
+                          const SizedBox(height: 12),
+                          buildMainSettings(),
+                          const SizedBox(height: 12),
+                          buildIntervalSelector(),
+                          const SizedBox(height: 12),
+                          buildContentOptions(),
+                          const SizedBox(height: 14),
+                          buildActionButtons(),
+                          const SizedBox(height: 30),
+                        ],
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
