@@ -44,7 +44,8 @@ import 'services/management_report_service.dart';
 
 import 'services/management_excel_export_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const SarabanApp());
 }
 
@@ -8230,23 +8231,19 @@ Future<void> saveAndShareCsvFile() async {
       ),
     );
 
-    await SharePlus.instance.share(
-      ShareParams(
-        text: 'خروجی CSV سوابق دریافت ساربان',
-        files: [
-          XFile(file.path),
-        ],
-      ),
-    );
-  } catch (e) {
-    if (!mounted) return;
+   await Share.shareXFiles(
+       [XFile(file.path)],
+       text: 'خروجی CSV سوابق دریافت ساربان',
+     );
+   } catch (e) {
+     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('خطا در ساخت فایل CSV: $e'),
-      ),
-    );
-  }
+     ScaffoldMessenger.of(context).showSnackBar(
+       SnackBar(
+         content: Text('خطا در ساخت فایل CSV: $e'),
+       ),
+     );
+   }
 }
 
 

@@ -62,11 +62,10 @@ class LocationService {
     }
 
     try {
+      // این بخش برای هماهنگی با نسخه فعلی geolocator اصلاح شد
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 8),
-        ),
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 8),
       );
 
       return AppLocationResult.success(position);

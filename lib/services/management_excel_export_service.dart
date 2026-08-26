@@ -98,13 +98,9 @@ class ManagementExcelExportService {
 
     await file.writeAsBytes(bytes, flush: true);
 
-    await SharePlus.instance.share(
-      ShareParams(
-        text: 'خروجی گزارش مدیریتی ساربان',
-        files: [
-          XFile(file.path),
-        ],
-      ),
+    await Share.shareXFiles(
+      [XFile(file.path)],
+      text: 'خروجی گزارش مدیریتی ساربان',
     );
 
     return file;
