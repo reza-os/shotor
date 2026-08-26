@@ -7125,10 +7125,14 @@ class MorePage extends StatelessWidget {
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(14, 14, 14, 28),
                     children: [
-                      Container(
-                        decoration: cardDecoration(),
-                        child: Column(
-                          children: [
+                     Container(
+                       decoration: cardDecoration(),
+                       child: Material(
+                         color: Colors.white,
+                         borderRadius: BorderRadius.circular(20),
+                         clipBehavior: Clip.antiAlias,
+                         child: Column(
+                           children: [
                             ListTile(
                               leading: const CircleAvatar(
                                 backgroundColor: Color(0xFFEAF8F2),
@@ -7274,6 +7278,7 @@ class MorePage extends StatelessWidget {
                                 showAboutProject(context);
                               },
                             ),
+                            const Divider(height: 1),
                             ListTile(
                               leading: const CircleAvatar(
                                 backgroundColor: Color(0xFFFFF3E0),
@@ -7295,6 +7300,7 @@ class MorePage extends StatelessWidget {
                             ),
                           ],
                         ),
+                      ),
                       ),
                     ],
                   ),
