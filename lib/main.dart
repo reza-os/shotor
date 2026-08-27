@@ -44,6 +44,9 @@ import 'services/management_report_service.dart';
 
 import 'services/management_excel_export_service.dart';
 
+import 'screens/live_herd_page.dart';
+import 'services/live_herd_session_service.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const SarabanApp());
@@ -470,14 +473,18 @@ class _HomePageState extends State<HomePage> {
                     crossAxisSpacing: 10,
                     childAspectRatio: 0.88,
                     children: [
-                      ActionTile(
-                        title: 'شروع دریافت',
-                        icon: Icons.settings_input_antenna_rounded,
-                        filled: true,
-                        onTap: () {
-                          goToTab(1);
-                        },
-                      ),
+                     ActionTile(
+                       title: 'گله زنده',
+                       icon: Icons.pets_rounded,
+                       filled: true,
+                       onTap: () {
+                         Navigator.of(context).push(
+                           MaterialPageRoute(
+                             builder: (_) => const LiveHerdPage(),
+                           ),
+                         );
+                       },
+                     ),
                       ActionTile(
                         title: 'نقشه گله',
                         icon: Icons.map_rounded,
@@ -672,6 +679,10 @@ class _ReceivePageState extends State<ReceivePage>
   }
 
   Future<void> connectUsbDevice() async {
+   await LiveHerdSessionService.startSession(
+      reset: true,
+    );
+
     try {
       setState(() {
         isUsbConnecting = true;
@@ -7294,6 +7305,32 @@ class MorePage extends StatelessWidget {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (_) => const SmsReportSettingsPage(),
+                                  ),
+                                );
+                              },
+                            ),
+
+                            const Divider(height: 1),
+                            ListTile(
+                              leading: const CircleAvatar(
+                                backgroundColor: Color(0xFFEAF8F2),
+                                child: Icon(
+                                  Icons.pets_rounded,
+                                  color: Color(0xFF008B62),
+                                ),
+                              ),
+                              title: const Text(
+                                'وضعیت زنده گله',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: const Text(
+                                'گزارش لحظه‌ای از جلسه دریافت آنتن',
+                              ),
+                              trailing: const Icon(Icons.chevron_left_rounded),
+                              onTap: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const LiveHerdPage(),
                                   ),
                                 );
                               },
