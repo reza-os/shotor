@@ -1,5 +1,5 @@
 import 'dart:async';
-
+import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/live_herd_settings.dart';
@@ -7,6 +7,7 @@ import '../models/live_herd_status.dart';
 import '../services/live_herd_settings_service.dart';
 import '../services/live_herd_status_service.dart';
 import '../services/live_herd_session_service.dart';
+
 
 
 class LiveHerdPage extends StatefulWidget {
@@ -321,6 +322,161 @@ void dispose() {
     );
   }
 
+
+
+  void showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
+  }
+
+  void showCamelPhoto(LiveCamelStatus camel) {
+    if (!camel.hasPhoto) {
+      showMessage('برای این شتر هنوز عکسی ثبت نشده است.');
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: Dialog(
+            insetPadding: const EdgeInsets.all(18),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    color: const Color(0xFF062C5E),
+                    child: Text(
+                      camel.camelName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                  InteractiveViewer(
+                    child: Image.file(
+                      File(camel.photoPath),
+                      width: double.infinity,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        return const Padding(
+                          padding: EdgeInsets.all(20),
+                          child: Text(
+                            'فایل عکس پیدا نشد یا قابل نمایش نیست.',
+                            style: TextStyle(
+                              color: Color(0xFFD32F2F),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    icon: const Icon(Icons.close_rounded),
+                    label: const Text('بستن'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget buildCamelAvatar(
+    LiveCamelStatus camel,
+    Color color,
+  ) {
+    return GestureDetector(
+      onTap: () {
+        showCamelPhoto(camel);
+      },
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 58,
+            height: 58,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+              border: Border.all(
+                color: color,
+                width: 2.6,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withOpacity(0.20),
+                  blurRadius: 12,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: ClipOval(
+              child: camel.hasPhoto
+                  ? Image.file(
+                      File(camel.photoPath),
+                      width: 52,
+                      height: 52,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) {
+                        return buildDefaultAvatar(color);
+                      },
+                    )
+                  : buildDefaultAvatar(color),
+            ),
+          ),
+          Positioned(
+            right: 2,
+            bottom: 2,
+            child: Container(
+              width: 15,
+              height: 15,
+              decoration: BoxDecoration(
+                color: color,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white,
+                  width: 2,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildDefaultAvatar(Color color) {
+    return Container(
+      color: color.withOpacity(0.10),
+      child: Icon(
+        Icons.pets_rounded,
+        color: color,
+        size: 28,
+      ),
+    );
+  }
+
   Widget buildCamelCard(LiveCamelStatus camel) {
     final color = levelColor(camel.level);
 
@@ -330,13 +486,7 @@ void dispose() {
       decoration: cardDecoration(),
       child: Row(
         children: [
-          CircleAvatar(
-            backgroundColor: color.withOpacity(0.12),
-            child: Icon(
-              levelIcon(camel.level),
-              color: color,
-            ),
-          ),
+         buildCamelAvatar(camel, color),
           const SizedBox(width: 10),
           Expanded(
             child: Column(

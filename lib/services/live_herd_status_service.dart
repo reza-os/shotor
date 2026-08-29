@@ -7,6 +7,7 @@ import 'area_zone_service.dart';
 import 'camel_profile_service.dart';
 import 'local_storage_service.dart';
 import 'zone_check_service.dart';
+import 'camel_detail_service.dart';
 
 class LiveHerdStatusService {
   static DateTime? recordDateTime(TagRecord record) {
@@ -131,6 +132,13 @@ class LiveHerdStatusService {
     final profiles = await CamelProfileService.loadProfiles();
     final records = await LocalStorageService.loadTagRecords();
     final zones = await AreaZoneService.loadZones();
+    final details = await CamelDetailService.loadAllDetails(
+      limit: 10000,
+    );
+
+    final detailsByTagId = {
+      for (final detail in details) detail.tagId: detail,
+    };
 
     final activeProfiles = profiles.where((profile) {
       return profile.isActive;
@@ -167,6 +175,7 @@ class LiveHerdStatusService {
     final camels = <LiveCamelStatus>[];
 
     for (final profile in activeProfiles) {
+    final detail = detailsByTagId[profile.tagId];
       final sessionRecord = latestRecordForTag(
         tagId: profile.tagId,
         records: sessionRecords,
@@ -235,10 +244,11 @@ class LiveHerdStatusService {
       );
 
       camels.add(
-        LiveCamelStatus(
-          tagId: profile.tagId,
-          camelNo: profile.camelNo,
-          camelName: profile.camelName,
+       LiveCamelStatus(
+         tagId: profile.tagId,
+         camelNo: profile.camelNo,
+         camelName: profile.camelName,
+         photoPath: detail?.photoPath ?? '',
           seenInSession: seenInSession,
           seenRecently: seenRecently,
           missing: missing,

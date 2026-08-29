@@ -11,6 +11,7 @@ class LiveCamelStatus {
   final String tagId;
   final String camelNo;
   final String camelName;
+  final String photoPath;
 
   final bool seenInSession;
   final bool seenRecently;
@@ -37,6 +38,7 @@ class LiveCamelStatus {
     required this.tagId,
     required this.camelNo,
     required this.camelName,
+    required this.photoPath,
     required this.seenInSession,
     required this.seenRecently,
     required this.missing,
@@ -53,11 +55,16 @@ class LiveCamelStatus {
     required this.statusText,
     required this.level,
     required this.lastRecord,
+
   });
 
   bool get hasLiveProblem {
     return level != LiveCamelLevel.normal;
   }
+
+bool get hasPhoto {
+  return photoPath.trim().isNotEmpty;
+}
 
   bool get isDanger {
     return level == LiveCamelLevel.danger;
