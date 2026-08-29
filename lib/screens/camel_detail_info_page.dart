@@ -4,20 +4,43 @@ import '../models/camel_detail.dart';
 import '../models/camel_profile.dart';
 
 class CamelDetailInfoPage extends StatelessWidget {
-  final CamelProfile profile;
+  final CamelProfile? profile;
   final CamelDetail detail;
+
+  final String? camelName;
+  final String? camelNo;
+  final String? tagId;
 
   const CamelDetailInfoPage({
     super.key,
-    required this.profile,
+    required CamelProfile this.profile,
     required this.detail,
-  });
+  })  : camelName = null,
+        camelNo = null,
+        tagId = null;
+
+  const CamelDetailInfoPage.byValues({
+    super.key,
+    required this.detail,
+    required this.camelName,
+    required this.camelNo,
+    required this.tagId,
+  }) : profile = null;
 
   @override
   Widget build(BuildContext context) {
+    final displayCamelName =
+        profile?.camelName ?? camelName ?? 'شتر';
+
+    final displayCamelNo =
+        profile?.camelNo ?? camelNo ?? '-';
+
+    final displayTagId =
+        profile?.tagId ?? tagId ?? detail.tagId;
+
     final lines = detail.toDescriptionLines(
-      camelName: profile.camelName,
-      camelNo: profile.camelNo,
+      camelName: displayCamelName,
+      camelNo: displayCamelNo,
     );
 
     return Directionality(
@@ -61,7 +84,7 @@ class CamelDetailInfoPage extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          profile.camelName,
+                          displayCamelName,
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 18,
@@ -69,7 +92,7 @@ class CamelDetailInfoPage extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${profile.tagId} / شماره ${profile.camelNo}',
+                          '$displayTagId / شماره $displayCamelNo',
                           textDirection: TextDirection.ltr,
                           style: const TextStyle(
                             color: Colors.black54,
@@ -81,7 +104,9 @@ class CamelDetailInfoPage extends StatelessWidget {
                 ],
               ),
             ),
+
             const SizedBox(height: 14),
+
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -99,7 +124,9 @@ class CamelDetailInfoPage extends StatelessWidget {
                       color: Color(0xFF062C5E),
                     ),
                   ),
+
                   const SizedBox(height: 12),
+
                   ...lines.map(
                     (line) {
                       return Padding(
