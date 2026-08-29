@@ -22,8 +22,7 @@ class _LiveHerdPageState extends State<LiveHerdPage> {
   LiveHerdSettings settings = const LiveHerdSettings();
   LiveHerdStatus? status;
 
-  Timer? seenTimer;
-  Timer? missingTimer;
+Timer? autoRefreshTimer;
   VoidCallback? sessionListener;
 
   bool isLoading = true;
@@ -59,19 +58,20 @@ class _LiveHerdPageState extends State<LiveHerdPage> {
    initializePage();
  }
 
- @override
- void dispose() {
-   seenTimer?.cancel();
-   missingTimer?.cancel();
+@override
+void dispose() {
+  autoRefreshTimer?.cancel();
 
-   if (sessionListener != null) {
-     LiveHerdSessionService.sessionStartNotifier.removeListener(
-       sessionListener!,
-     );
-   }
+  if (sessionListener != null) {
+    LiveHerdSessionService.sessionStartNotifier.removeListener(
+      sessionListener!,
+    );
+  }
 
-   super.dispose();
- }
+  super.dispose();
+}
+
+
 
   Future<void> initializePage() async {
     final loadedSettings = await LiveHerdSettingsService.loadSettings();
@@ -89,27 +89,28 @@ class _LiveHerdPageState extends State<LiveHerdPage> {
     await refreshStatus();
   }
 
-  void startTimers() {
-    seenTimer?.cancel();
-    missingTimer?.cancel();
+ void startTimers() {
+   autoRefreshTimer?.cancel();
 
-    seenTimer = Timer.periodic(
-      Duration(minutes: settings.seenRefreshMinutes.clamp(1, 999)),
-      (_) {
-        refreshStatus();
-      },
-    );
+   final refreshMinutes =
+       settings.seenRefreshMinutes <= 0 ? 1 : settings.seenRefreshMinutes;
 
-    missingTimer = Timer.periodic(
-      Duration(minutes: settings.missingCheckMinutes.clamp(1, 999)),
-      (_) {
-        refreshStatus();
-      },
-    );
-  }
+   autoRefreshTimer = Timer.periodic(
+     Duration(minutes: refreshMinutes),
+     (_) async {
+       if (!mounted) return;
+       if (isRefreshing) return;
+
+       await refreshStatus();
+     },
+   );
+ }
+
+
 
   Future<void> refreshStatus() async {
     if (isRefreshing) return;
+    debugPrint('Live herd auto refresh: ${DateTime.now()}');
 
     setState(() {
       isRefreshing = true;

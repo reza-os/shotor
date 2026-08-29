@@ -47,6 +47,8 @@ import 'services/management_excel_export_service.dart';
 import 'screens/live_herd_page.dart';
 import 'services/live_herd_session_service.dart';
 
+import 'screens/camel_info_dashboard_page.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const SarabanApp());
@@ -461,6 +463,63 @@ class _HomePageState extends State<HomePage> {
                               ),
                             ],
                           ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  const SizedBox(height: 14),
+
+                  InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const CamelInfoDashboardPage(),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: cardDecoration(),
+                      child: Row(
+                        children: const [
+                          CircleAvatar(
+                            radius: 26,
+                            backgroundColor: Color(0xFFEAF2FF),
+                            child: Icon(
+                              Icons.badge_rounded,
+                              color: Color(0xFF086EBB),
+                              size: 28,
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'داشبورد اطلاعات شترها',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                SizedBox(height: 5),
+                                Text(
+                                  'ثبت، ویرایش، جدول و توضیحات شترها',
+                                  style: TextStyle(
+                                    color: Colors.black54,
+                                    height: 1.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(Icons.chevron_left_rounded),
+                        ],
+                      ),
+                    ),
                   ),
 
                   const SizedBox(height: 14),
