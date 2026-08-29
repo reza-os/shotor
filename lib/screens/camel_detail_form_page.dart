@@ -1,4 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as path_helper;
+import 'package:path_provider/path_provider.dart';
 
 import '../models/camel_detail.dart';
 import '../models/camel_profile.dart';
@@ -29,6 +34,7 @@ class _CamelDetailFormPageState extends State<CamelDetailFormPage> {
   final breedController = TextEditingController();
   final healthController = TextEditingController();
   final descriptionController = TextEditingController();
+  final ImagePicker imagePicker = ImagePicker();
 
   String photoPath = '';
 
@@ -146,6 +152,162 @@ class _CamelDetailFormPageState extends State<CamelDetailFormPage> {
     );
   }
 
+  Future<void> showPhotoSourceSheet() async {
+    final profile = selectedProfile;
+
+    if (profile == null) {
+      showMessage('اول یک شتر را انتخاب کن.');
+      return;
+    }
+
+    await showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(20),
+        ),
+      ),
+      builder: (context) {
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'انتخاب عکس شتر',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    leading: const CircleAvatar(
+                      backgroundColor: Color(0xFFEAF2FF),
+                      child: Icon(
+                        Icons.photo_library_rounded,
+                        color: Color(0xFF086EBB),
+                      ),
+                    ),
+                    title: const Text('انتخاب از گالری'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      pickCamelPhoto(ImageSource.gallery);
+                    },
+                  ),
+                  ListTile(
+                    leading: const CircleAvatar(
+                      backgroundColor: Color(0xFFEAF8F2),
+                      child: Icon(
+                        Icons.camera_alt_rounded,
+                        color: Color(0xFF008B62),
+                      ),
+                    ),
+                    title: const Text('گرفتن عکس با دوربین'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      pickCamelPhoto(ImageSource.camera);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> pickCamelPhoto(ImageSource source) async {
+    final profile = selectedProfile;
+
+    if (profile == null) {
+      showMessage('اول یک شتر را انتخاب کن.');
+      return;
+    }
+
+    try {
+      final pickedFile = await imagePicker.pickImage(
+        source: source,
+        imageQuality: 75,
+        maxWidth: 1400,
+      );
+
+      if (pickedFile == null) {
+        return;
+      }
+
+      final savedPath = await saveImageToAppFolder(
+        pickedFile: pickedFile,
+        tagId: profile.tagId,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        photoPath = savedPath;
+      });
+
+      showMessage('عکس انتخاب شد. برای ثبت نهایی، دکمه ذخیره اطلاعات شتر را بزن.');
+    } catch (error) {
+      showMessage('خطا در انتخاب عکس: $error');
+    }
+  }
+
+  Future<String> saveImageToAppFolder({
+    required XFile pickedFile,
+    required String tagId,
+  }) async {
+    final appDir = await getApplicationDocumentsDirectory();
+
+    final photosDir = Directory(
+      path_helper.join(
+        appDir.path,
+        'camel_photos',
+      ),
+    );
+
+    if (!await photosDir.exists()) {
+      await photosDir.create(
+        recursive: true,
+      );
+    }
+
+    final cleanTagId = tagId.replaceAll(
+      RegExp(r'[^a-zA-Z0-9_-]'),
+      '_',
+    );
+
+    final extension = path_helper.extension(pickedFile.path).isEmpty
+        ? '.jpg'
+        : path_helper.extension(pickedFile.path);
+
+    final fileName =
+        '${cleanTagId}_${DateTime.now().millisecondsSinceEpoch}$extension';
+
+    final savedFile = File(
+      path_helper.join(
+        photosDir.path,
+        fileName,
+      ),
+    );
+
+    await File(pickedFile.path).copy(savedFile.path);
+
+    return savedFile.path;
+  }
+
+  void removeSelectedPhoto() {
+    setState(() {
+      photoPath = '';
+    });
+
+    showMessage('عکس از فرم حذف شد. برای ثبت نهایی، ذخیره را بزن.');
+  }
+
   Widget buildProfileSelector() {
     return Container(
       padding: const EdgeInsets.all(14),
@@ -258,6 +420,105 @@ class _CamelDetailFormPageState extends State<CamelDetailFormPage> {
     );
   }
 
+  Widget buildPhotoSection() {
+    final hasPhoto = photoPath.trim().isNotEmpty;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F7FA),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: const Color(0xFFE5E7EB),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'عکس شتر',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF062C5E),
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (hasPhoto)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.file(
+                File(photoPath),
+                width: double.infinity,
+                height: 220,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    color: const Color(0xFFFFEBEE),
+                    child: const Text(
+                      'فایل عکس پیدا نشد یا قابل نمایش نیست.',
+                      style: TextStyle(
+                        color: Color(0xFFD32F2F),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            )
+          else
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Text(
+                'هنوز عکسی برای این شتر انتخاب نشده است.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.black54,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: showPhotoSourceSheet,
+                  icon: const Icon(Icons.add_a_photo_rounded),
+                  label: Text(
+                    hasPhoto ? 'تغییر عکس' : 'افزودن عکس',
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF086EBB),
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+              if (hasPhoto) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: removeSelectedPhoto,
+                  icon: const Icon(
+                    Icons.delete_rounded,
+                    color: Color(0xFFD32F2F),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget buildFormCard() {
     final profile = selectedProfile;
 
@@ -328,23 +589,7 @@ class _CamelDetailFormPageState extends State<CamelDetailFormPage> {
             controller: descriptionController,
             maxLines: 3,
           ),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(12),
-            margin: const EdgeInsets.only(bottom: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF8E1),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Text(
-              'بخش انتخاب عکس در مرحله بعد اضافه می‌شود. فعلاً فرم متنی و عددی ذخیره می‌شود.',
-              style: TextStyle(
-                color: Color(0xFF8A4B00),
-                fontWeight: FontWeight.bold,
-                height: 1.6,
-              ),
-            ),
-          ),
+         buildPhotoSection(),
           SizedBox(
             width: double.infinity,
             height: 52,
