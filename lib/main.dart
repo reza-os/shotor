@@ -48,6 +48,8 @@ import 'screens/live_herd_page.dart';
 import 'services/live_herd_session_service.dart';
 
 import 'screens/camel_info_dashboard_page.dart';
+import 'services/saraban_export_service.dart';
+import 'services/herd_settings_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -4549,6 +4551,116 @@ class _ReportPageState extends State<ReportPage> {
   }
 
 
+
+Future<void> createSystemJson() async {
+
+
+  final herd =
+      await HerdSettingsService.load();
+
+
+  final settings =
+      await AppSettingsService.loadSettings();
+
+
+  final records =
+      await LocalStorageService.loadTagRecords();
+
+
+
+  final jsonText =
+      SarabanExportService.createJson(
+
+        herd: herd,
+
+        shepherdName:
+            settings.shepherdName,
+
+        shepherdId:
+            settings.shepherdId,
+
+        deviceId:
+            settings.deviceId,
+
+        records: records,
+
+      );
+
+
+
+  if(!mounted) return;
+
+
+
+  showDialog(
+
+    context: context,
+
+    builder: (_) {
+
+      return AlertDialog(
+
+        title:
+            const Text('خروجی سامانه'),
+
+
+        content:
+
+        SizedBox(
+
+          width: double.maxFinite,
+
+          child:
+
+          SingleChildScrollView(
+
+            child:
+
+            SelectableText(
+              jsonText,
+            ),
+
+          ),
+
+        ),
+
+
+        actions:[
+
+
+          TextButton(
+
+            onPressed:(){
+
+              Clipboard.setData(
+                ClipboardData(
+                  text: jsonText,
+                ),
+              );
+
+
+              Navigator.pop(context);
+
+            },
+
+            child:
+              const Text('کپی'),
+
+          ),
+
+
+        ],
+
+      );
+
+    },
+
+  );
+
+}
+
+
+
   Future<void> loadAppSettings() async {
     final loadedSettings = await AppSettingsService.loadSettings();
 
@@ -4951,23 +5063,13 @@ class _ReportPageState extends State<ReportPage> {
                           children: [
                             Expanded(
                               child: ElevatedButton.icon(
-                                onPressed: records.isEmpty || isSyncing
-                                    ? null
-                                    : syncQueuedRecords,
-                                icon: isSyncing
-                                    ? const SizedBox(
-                                        width: 18,
-                                        height: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Icon(Icons.cloud_upload_rounded),
-                                label: Text(
-                                  isSyncing
-                                      ? 'در حال ارسال...'
-                                      : 'ارسال رکوردهای روز',
+                               onPressed: records.isEmpty
+                                   ? null
+                                   : createSystemJson,
+                                icon: const Icon(Icons.data_object_rounded),
+
+                                label: const Text(
+                                  'ساخت خروجی سامانه',
                                 ),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: const Color(0xFF003B7A),
@@ -5634,127 +5736,75 @@ ManagementReport? report;
     );
   }
 
-  Widget buildTimeSlotSection(ManagementReport currentReport) {
-    final slots = currentReport.timeSlots;
-    final rows = currentReport.timeSlotRows;
+ Widget buildTimeSlotSection(ManagementReport currentReport) {
+   final slots = currentReport.timeSlots;
+   final rows = currentReport.timeSlotRows;
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: cardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SectionTitle(title: 'حضور زمانی شترها'),
-          const Text(
-            'در هر ستون، آخرین محدوده مشاهده‌شده در همان بازه زمانی نمایش داده می‌شود.',
-            style: TextStyle(
-              color: Colors.black54,
-              fontSize: 12,
-              height: 1.6,
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (rows.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text(
-                'ردیفی برای گزارش وجود ندارد.',
-                style: TextStyle(color: Colors.black54),
-              ),
-            )
-          else
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                headingRowColor: WidgetStateProperty.all(
-                  const Color(0xFFEAF2FF),
-                ),
-                columns: [
-                  const DataColumn(label: Text('شتر')),
-                  ...slots.map(
-                    (slot) => DataColumn(
-                      label: Text(slot.label),
-                    ),
-                  ),
-                ],
-                rows: rows.map((row) {
-                  return DataRow(
-                    cells: [
-                      DataCell(
-                        SizedBox(
-                          width: 110,
-                          child: Text(
-                            row.camelName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                      ...slots.map(
-                        (slot) {
-                          final value = row.slotLocations[slot.label] ?? '-';
+   return Container(
+     padding: const EdgeInsets.all(14),
+     decoration: cardDecoration(),
+     child: Column(
+       crossAxisAlignment: CrossAxisAlignment.start,
+       children: [
+         const ReportSectionHeader(
+           icon: Icons.schedule_rounded,
+           title: 'نمودار شتر × زمان',
+           subtitle: 'نمایش دیداری حضور هر شتر در بازه‌های زمانی روز',
+         ),
+         const SizedBox(height: 10),
+         const TimelineLegend(),
+         const SizedBox(height: 14),
+         if (rows.isEmpty)
+           const EmptyManagementChart(
+             icon: Icons.timeline_rounded,
+             text: 'برای این تاریخ داده زمانی ثبت نشده است.',
+           )
+         else
+           ...rows.map(
+             (row) => CamelTimelineReportCard(
+               row: row,
+               slots: slots,
+             ),
+           ),
+       ],
+     ),
+   );
+ }
 
-                          return DataCell(
-                            SizedBox(
-                              width: 95,
-                              child: Text(
-                                value,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: value.contains('ممنوعه') ||
-                                          value.contains('خارج')
-                                      ? const Color(0xFFD32F2F)
-                                      : const Color(0xFF062C5E),
-                                  fontSize: 12,
-                                  fontWeight: value == '-'
-                                      ? FontWeight.normal
-                                      : FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  );
-                }).toList(),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+   Widget buildLocationDurationSection(ManagementReport currentReport) {
+     final rows = currentReport.locationDurationRows;
 
-  Widget buildLocationDurationSection(ManagementReport currentReport) {
-    final rows = currentReport.locationDurationRows;
+     final sortedRows = [...rows];
+     sortedRows.sort(
+       (a, b) => b.totalEstimatedMinutes.compareTo(a.totalEstimatedMinutes),
+     );
 
-    return Container(
-      decoration: cardDecoration(),
-      child: Column(
-        children: [
-          const SectionTitle(title: 'مدت حضور تقریبی شتر × مکان'),
-          if (rows.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'داده‌ای برای تحلیل مدت حضور وجود ندارد.',
-                style: TextStyle(color: Colors.black54),
-              ),
-            )
-          else
-            ...rows.map(
-              (row) => LocationDurationReportCard(row: row),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
+     return Container(
+       padding: const EdgeInsets.all(14),
+       decoration: cardDecoration(),
+       child: Column(
+         crossAxisAlignment: CrossAxisAlignment.start,
+         children: [
+           const ReportSectionHeader(
+             icon: Icons.place_rounded,
+             title: 'نمودار شتر × مکان',
+             subtitle: 'مدت حضور تقریبی هر شتر در محدوده‌ها و مکان‌های ثبت‌شده',
+           ),
+           const SizedBox(height: 14),
+           if (sortedRows.isEmpty)
+             const EmptyManagementChart(
+               icon: Icons.bar_chart_rounded,
+               text: 'برای تحلیل مکان، داده کافی وجود ندارد.',
+             )
+           else
+             ...sortedRows.map(
+               (row) => LocationDurationReportCard(row: row),
+             ),
+         ],
+       ),
+     );
+   }
+ }
 
 
 class PrintableManagementReportPreviewPage extends StatelessWidget {
@@ -6745,6 +6795,434 @@ class ReportSmallInfo extends StatelessWidget {
   }
 }
 
+class ReportSectionHeader extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const ReportSectionHeader({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: const Color(0xFFEAF2FF),
+            borderRadius: BorderRadius.circular(15),
+          ),
+          child: Icon(
+            icon,
+            color: const Color(0xFF062C5E),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: Color(0xFF062C5E),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: Colors.black54,
+                  fontSize: 12,
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class EmptyManagementChart extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const EmptyManagementChart({
+    super.key,
+    required this.icon,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: 14,
+        vertical: 22,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F7FA),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE5EAF0)),
+      ),
+      child: Column(
+        children: [
+          Icon(
+            icon,
+            color: Colors.black26,
+            size: 34,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.black54,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class TimelineLegend extends StatelessWidget {
+  const TimelineLegend({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 7,
+      runSpacing: 7,
+      children: const [
+        TimelineLegendItem(
+          color: Color(0xFF008B62),
+          text: 'محدوده عادی',
+        ),
+        TimelineLegendItem(
+          color: Color(0xFF086EBB),
+          text: 'آب',
+        ),
+        TimelineLegendItem(
+          color: Color(0xFFE87500),
+          text: 'خارج محدوده',
+        ),
+        TimelineLegendItem(
+          color: Color(0xFFD32F2F),
+          text: 'ممنوعه / خطر',
+        ),
+        TimelineLegendItem(
+          color: Color(0xFFB8C0CC),
+          text: 'بدون دریافت',
+        ),
+      ],
+    );
+  }
+}
+
+class TimelineLegendItem extends StatelessWidget {
+  final Color color;
+  final String text;
+
+  const TimelineLegendItem({
+    super.key,
+    required this.color,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 9,
+        vertical: 6,
+      ),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.09),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: TextStyle(
+              color: color,
+              fontSize: 10.5,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class CamelTimelineReportCard extends StatelessWidget {
+  final CamelTimeSlotReport row;
+  final List<ReportTimeSlot> slots;
+
+  const CamelTimelineReportCard({
+    super.key,
+    required this.row,
+    required this.slots,
+  });
+
+  int get activeSlotCount {
+    var count = 0;
+
+    for (final slot in slots) {
+      final value = row.slotLocations[slot.label] ?? '-';
+
+      if (value.trim().isNotEmpty && value != '-') {
+        count++;
+      }
+    }
+
+    return count;
+  }
+
+  Color colorForLocation(String value) {
+    final text = value.trim();
+
+    if (text == '-' || text.isEmpty) {
+      return const Color(0xFFB8C0CC);
+    }
+
+    if (text.contains('ممنوع') || text.contains('خطر')) {
+      return const Color(0xFFD32F2F);
+    }
+
+    if (text.contains('خارج')) {
+      return const Color(0xFFE87500);
+    }
+
+    if (text.contains('آب')) {
+      return const Color(0xFF086EBB);
+    }
+
+    if (text.contains('آغل') || text.contains('اصطبل')) {
+      return const Color(0xFF7B3FB3);
+    }
+
+    return const Color(0xFF008B62);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final seenPercent = slots.isEmpty ? 0.0 : activeSlotCount / slots.length;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFDFEFE),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE8EDF3)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.035),
+            blurRadius: 14,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 23,
+                backgroundColor: const Color(0xFFF3E8D6),
+                child: Text(
+                  row.camelNo,
+                  style: const TextStyle(
+                    color: Color(0xFF062C5E),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      row.camelName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF1F2937),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Directionality(
+                      textDirection: TextDirection.ltr,
+                      child: Text(
+                        row.tagId,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.black45,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 9,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF8F2),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$activeSlotCount/${slots.length} بازه',
+                  style: const TextStyle(
+                    color: Color(0xFF008B62),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: seenPercent.clamp(0.0, 1.0),
+              minHeight: 7,
+              backgroundColor: const Color(0xFFE8EDF3),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                Color(0xFF008B62),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: slots.map(
+                (slot) {
+                  final value = row.slotLocations[slot.label] ?? '-';
+                  final color = colorForLocation(value);
+
+                  return TimelineSlotChip(
+                    timeLabel: slot.label,
+                    locationText: value,
+                    color: color,
+                  );
+                },
+              ).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class TimelineSlotChip extends StatelessWidget {
+  final String timeLabel;
+  final String locationText;
+  final Color color;
+
+  const TimelineSlotChip({
+    super.key,
+    required this.timeLabel,
+    required this.locationText,
+    required this.color,
+  });
+
+  bool get isEmpty {
+    return locationText.trim().isEmpty || locationText.trim() == '-';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 92,
+      margin: const EdgeInsets.only(left: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: isEmpty ? const Color(0xFFF3F5F8) : color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isEmpty
+              ? const Color(0xFFE3E7ED)
+              : color.withOpacity(0.26),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            timeLabel,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: isEmpty ? Colors.black38 : color,
+              fontSize: 10.5,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            width: 18,
+            height: 5,
+            decoration: BoxDecoration(
+              color: isEmpty ? const Color(0xFFB8C0CC) : color,
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            isEmpty ? 'بدون دریافت' : locationText,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: isEmpty ? Colors.black38 : const Color(0xFF1F2937),
+              fontSize: 10.5,
+              height: 1.3,
+              fontWeight: isEmpty ? FontWeight.normal : FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class LocationDurationReportCard extends StatelessWidget {
   final CamelLocationDurationReport row;
 
@@ -6753,29 +7231,70 @@ class LocationDurationReportCard extends StatelessWidget {
     required this.row,
   });
 
-  @override
-  Widget build(BuildContext context) {
+  List<MapEntry<String, int>> get sortedEntries {
     final entries = row.minutesByLocation.entries.toList();
 
     entries.sort((a, b) {
       return b.value.compareTo(a.value);
     });
 
+    return entries;
+  }
+
+  Color colorForLocation(String title, bool isUnknown) {
+    if (isUnknown) return Colors.grey;
+
+    if (title.contains('ممنوع') || title.contains('خطر')) {
+      return const Color(0xFFD32F2F);
+    }
+
+    if (title.contains('خارج')) {
+      return const Color(0xFFE87500);
+    }
+
+    if (title.contains('آب')) {
+      return const Color(0xFF086EBB);
+    }
+
+    if (title.contains('آغل') || title.contains('اصطبل')) {
+      return const Color(0xFF7B3FB3);
+    }
+
+    return const Color(0xFF008B62);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = row.totalEstimatedMinutes;
+    final entries = sortedEntries;
+
+    final allEntries = <MapEntry<String, int>>[
+      ...entries,
+      if (row.unknownGapMinutes > 0)
+        MapEntry('زمان نامشخص', row.unknownGapMinutes),
+    ];
+
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 14,
-        vertical: 13,
-      ),
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFE8EDF3))),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFDFEFE),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE8EDF3)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.035),
+            blurRadius: 14,
+            offset: const Offset(0, 7),
+          ),
+        ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               CircleAvatar(
-                radius: 22,
+                radius: 23,
                 backgroundColor: const Color(0xFFF3E8D6),
                 child: Text(
                   row.camelNo,
@@ -6792,48 +7311,120 @@ class LocationDurationReportCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
+                    color: Color(0xFF1F2937),
                     fontWeight: FontWeight.bold,
                     fontSize: 15,
                   ),
                 ),
               ),
-              Text(
-                ManagementReportService.minutesText(row.totalEstimatedMinutes),
-                style: const TextStyle(
-                  color: Color(0xFF062C5E),
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF2FF),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  ManagementReportService.minutesText(total),
+                  style: const TextStyle(
+                    color: Color(0xFF062C5E),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          if (entries.isEmpty && row.unknownGapMinutes == 0)
-            const Text(
-              'برای محاسبه مدت حضور، حداقل دو رکورد زمانی لازم است.',
-              style: TextStyle(
-                color: Colors.black54,
-                fontSize: 12,
-                height: 1.6,
-              ),
+          const SizedBox(height: 13),
+          if (allEntries.isEmpty || total <= 0)
+            const EmptyManagementChart(
+              icon: Icons.more_time_rounded,
+              text: 'برای محاسبه مدت حضور، حداقل دو رکورد زمانی لازم است.',
             )
           else ...[
-            ...entries.map(
-              (entry) => LocationDurationBar(
-                title: entry.key,
-                minutes: entry.value,
-                totalMinutes: row.totalEstimatedMinutes,
-              ),
+            LocationStackedBar(
+              entries: allEntries,
+              totalMinutes: total,
             ),
-            if (row.unknownGapMinutes > 0)
-              LocationDurationBar(
-                title: 'زمان نامشخص',
-                minutes: row.unknownGapMinutes,
-                totalMinutes: row.totalEstimatedMinutes,
-                isUnknown: true,
-              ),
+            const SizedBox(height: 12),
+            ...allEntries.map(
+              (entry) {
+                final isUnknown = entry.key == 'زمان نامشخص';
+                final color = colorForLocation(entry.key, isUnknown);
+
+                return LocationDurationBar(
+                  title: entry.key,
+                  minutes: entry.value,
+                  totalMinutes: total,
+                  color: color,
+                );
+              },
+            ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class LocationStackedBar extends StatelessWidget {
+  final List<MapEntry<String, int>> entries;
+  final int totalMinutes;
+
+  const LocationStackedBar({
+    super.key,
+    required this.entries,
+    required this.totalMinutes,
+  });
+
+  Color colorForLocation(String title) {
+    if (title == 'زمان نامشخص') return Colors.grey;
+
+    if (title.contains('ممنوع') || title.contains('خطر')) {
+      return const Color(0xFFD32F2F);
+    }
+
+    if (title.contains('خارج')) {
+      return const Color(0xFFE87500);
+    }
+
+    if (title.contains('آب')) {
+      return const Color(0xFF086EBB);
+    }
+
+    if (title.contains('آغل') || title.contains('اصطبل')) {
+      return const Color(0xFF7B3FB3);
+    }
+
+    return const Color(0xFF008B62);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (entries.isEmpty || totalMinutes <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: SizedBox(
+        height: 18,
+        child: Row(
+          children: entries.map(
+            (entry) {
+              final flex = entry.value.clamp(1, 100000).toInt();
+
+              return Expanded(
+                flex: flex,
+                child: Container(
+                  color: colorForLocation(entry.key),
+                ),
+              );
+            },
+          ).toList(),
+        ),
       ),
     );
   }
@@ -6843,25 +7434,20 @@ class LocationDurationBar extends StatelessWidget {
   final String title;
   final int minutes;
   final int totalMinutes;
-  final bool isUnknown;
+  final Color color;
 
   const LocationDurationBar({
     super.key,
     required this.title,
     required this.minutes,
     required this.totalMinutes,
-    this.isUnknown = false,
+    required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
     final percent = totalMinutes <= 0 ? 0.0 : minutes / totalMinutes;
-
-    final color = isUnknown
-        ? Colors.grey
-        : title.contains('ممنوعه') || title.contains('خارج')
-            ? const Color(0xFFD32F2F)
-            : const Color(0xFF008B62);
+    final percentText = '${(percent * 100).round()}٪';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 9),
@@ -6869,20 +7455,29 @@ class LocationDurationBar extends StatelessWidget {
         children: [
           Row(
             children: [
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 7),
               Expanded(
                 child: Text(
                   title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
+                  style: const TextStyle(
+                    color: Color(0xFF1F2937),
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
               Text(
-                ManagementReportService.minutesText(minutes),
+                '${ManagementReportService.minutesText(minutes)} · $percentText',
                 style: TextStyle(
                   color: color,
                   fontSize: 11,
@@ -6891,24 +7486,37 @@ class LocationDurationBar extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 5),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: LinearProgressIndicator(
-              value: percent.clamp(0.0, 1.0),
-              minHeight: 8,
-              backgroundColor: color.withOpacity(0.10),
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-            ),
+          const SizedBox(height: 6),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              return Stack(
+                children: [
+                  Container(
+                    height: 9,
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 350),
+                    curve: Curves.easeOutCubic,
+                    width: constraints.maxWidth * percent.clamp(0.0, 1.0),
+                    height: 9,
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ],
       ),
     );
   }
 }
-
-
-
 
 
 
@@ -9044,6 +9652,10 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
   final centerPhoneController = TextEditingController();
   final locationNameController = TextEditingController();
   final baudRateController = TextEditingController();
+  final herdIdController = TextEditingController();
+  final herdNameController = TextEditingController();
+  final camelCountController = TextEditingController();
+  final deviceIdController = TextEditingController();
 
   bool smsEnabled = true;
   bool isLoading = true;
@@ -9055,15 +9667,24 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
     loadSettings();
   }
 
-  @override
-  void dispose() {
-    shepherdNameController.dispose();
-    shepherdIdController.dispose();
-    centerPhoneController.dispose();
-    locationNameController.dispose();
-    baudRateController.dispose();
-    super.dispose();
-  }
+ @override
+ void dispose() {
+
+   shepherdNameController.dispose();
+   shepherdIdController.dispose();
+   centerPhoneController.dispose();
+
+   herdIdController.dispose();
+   herdNameController.dispose();
+   camelCountController.dispose();
+
+   deviceIdController.dispose();
+
+   locationNameController.dispose();
+   baudRateController.dispose();
+
+   super.dispose();
+ }
 
   Future<void> loadSettings() async {
     final settings = await AppSettingsService.loadSettings();
@@ -9073,6 +9694,17 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
     centerPhoneController.text = settings.centerPhone;
     locationNameController.text = settings.defaultLocationName;
     baudRateController.text = settings.usbBaudRate.toString();
+    herdIdController.text =
+        settings.herdId;
+
+    herdNameController.text =
+        settings.herdName;
+
+    camelCountController.text =
+        settings.camelCount.toString();
+
+    deviceIdController.text =
+        settings.deviceId;
 
     if (!mounted) return;
 
@@ -9100,20 +9732,53 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
       isSaving = true;
     });
 
-    final settings = AppSettings(
-      shepherdName: shepherdNameController.text.trim().isEmpty
-          ? 'ساربان'
-          : shepherdNameController.text.trim(),
-      shepherdId: shepherdIdController.text.trim().isEmpty
-          ? '-'
-          : shepherdIdController.text.trim(),
-      centerPhone: centerPhoneController.text.trim(),
-      defaultLocationName: locationNameController.text.trim().isEmpty
-          ? 'دریافت از USB'
-          : locationNameController.text.trim(),
-      usbBaudRate: baudRate,
-      smsEnabled: smsEnabled,
-    );
+   final settings = AppSettings(
+
+     shepherdName:
+         shepherdNameController.text.trim().isEmpty
+             ? 'ساربان'
+             : shepherdNameController.text.trim(),
+
+     shepherdId:
+         shepherdIdController.text.trim().isEmpty
+             ? '-'
+             : shepherdIdController.text.trim(),
+
+     centerPhone:
+         centerPhoneController.text.trim(),
+
+
+     herdId:
+         herdIdController.text.trim(),
+
+     herdName:
+         herdNameController.text.trim(),
+
+
+     camelCount:
+         int.tryParse(
+           camelCountController.text.trim(),
+         ) ?? 0,
+
+
+     deviceId:
+         deviceIdController.text.trim().isEmpty
+             ? 'SARABAN-001'
+             : deviceIdController.text.trim(),
+
+
+     defaultLocationName:
+         locationNameController.text.trim().isEmpty
+             ? 'دریافت از USB'
+             : locationNameController.text.trim(),
+
+     usbBaudRate:
+         baudRate,
+
+     smsEnabled:
+         smsEnabled,
+
+   );
 
     await AppSettingsService.saveSettings(settings);
 
@@ -9219,6 +9884,55 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
                             ],
                           ),
                         ),
+                          const SizedBox(height: 14),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: cardDecoration(),
+
+                          child: Column(
+
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+
+                            children: [
+
+                              const SectionTitle(
+                                title: 'اطلاعات گله',
+                              ),
+
+
+                              buildTextField(
+                                controller: herdNameController,
+                                label: 'نام گله',
+                                icon: Icons.pets_rounded,
+                              ),
+
+
+                              const SizedBox(height:12),
+
+
+                              buildTextField(
+                                controller: herdIdController,
+                                label: 'شناسه گله',
+                                icon: Icons.badge_rounded,
+                                textDirection: TextDirection.ltr,
+                              ),
+
+
+                              const SizedBox(height:12),
+
+
+                              buildTextField(
+                                controller: camelCountController,
+                                label: 'تعداد کل شترها',
+                                icon: Icons.format_list_numbered_rounded,
+                                keyboardType: TextInputType.number,
+                              ),
+
+                            ],
+                          ),
+                        ),
                         const SizedBox(height: 14),
                         Container(
                           width: double.infinity,
@@ -9249,6 +9963,34 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
                                 label: 'نام محل پیش‌فرض دریافت',
                                 icon: Icons.place_rounded,
                               ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: cardDecoration(),
+
+                          child: Column(
+
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
+
+                            children: [
+
+                              const SectionTitle(
+                                title: 'شناسه دستگاه',
+                              ),
+
+
+                              buildTextField(
+                                controller: deviceIdController,
+                                label: 'Device ID',
+                                icon: Icons.phone_android_rounded,
+                                textDirection: TextDirection.ltr,
+                              ),
+
                             ],
                           ),
                         ),
