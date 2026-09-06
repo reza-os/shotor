@@ -23,6 +23,8 @@ import 'dart:async';
      import '../services/geo_area_service.dart';
 
 
+
+
      BoxDecoration _mapCardDecoration({
        Color color = Colors.white,
        double radius = 20,
@@ -1525,7 +1527,9 @@ import 'dart:async';
        State<SimpleGpsMap> createState() => _SimpleGpsMapState();
      }
 
-     class _SimpleGpsMapState extends State<SimpleGpsMap> {
+    class _SimpleGpsMapState
+        extends State<SimpleGpsMap>
+        with SingleTickerProviderStateMixin {
        static const double sceneWidth = 1200;
        static const double sceneHeight = 820;
 
@@ -1536,6 +1540,15 @@ import 'dart:async';
        Size viewportSize = Size.zero;
        bool didFitInitialView = false;
        double currentMapScale = 1.0;
+
+
+       bool get showClusters {
+
+         return currentMapScale < 1.5;
+
+       }
+
+
        MapDetailLevel get currentDetailLevel {
 
          if (currentMapScale < 0.8) {
@@ -1549,6 +1562,138 @@ import 'dart:async';
 
 
          return MapDetailLevel.high;
+       }
+
+
+
+
+
+
+       double markerSizeForRecord(TagRecord record) {
+
+         return zoneScaleForRecord(record);
+
+       }
+
+
+double zoneScaleForRecord(TagRecord record) {
+
+  double bestSize = 24;
+
+
+  for (final zone in activeZones) {
+
+    final centerDistance =
+        math.sqrt(
+          math.pow(
+            record.latitude! - zone.centerLatitude,
+            2,
+          ) +
+          math.pow(
+            record.longitude! - zone.centerLongitude,
+            2,
+          ),
+        );
+
+
+    if (centerDistance < 0.01) {
+
+      final radius =
+          zoneRadiusPixels(zone);
+
+
+      bestSize =
+          radius * 0.18;
+
+      break;
+
+    }
+
+  }
+
+
+  for (final polygon in activePolygonZones) {
+
+    final points =
+        polygon.points;
+
+
+    if(points.isEmpty){
+      continue;
+    }
+
+
+    final xs =
+        points.map(
+          (e) => e.latitude,
+        );
+
+
+    final ys =
+        points.map(
+          (e) => e.longitude,
+        );
+
+
+    final width =
+        (xs.reduce(math.max) -
+         xs.reduce(math.min))
+        .abs();
+
+
+    final height =
+        (ys.reduce(math.max) -
+         ys.reduce(math.min))
+        .abs();
+
+
+    final areaSize =
+        ((width + height) * 5000);
+
+
+    if(areaSize > 0){
+
+      bestSize =
+          areaSize * 0.08;
+
+    }
+
+  }
+
+
+  return bestSize.clamp(
+    14.0,
+    36.0,
+  );
+
+}
+
+
+
+
+
+
+       double get clusterDistance {
+
+         if (currentMapScale < 0.8) {
+
+           // نمای خیلی دور
+           return 0.003;
+
+         }
+
+
+         if (currentMapScale < 2.0) {
+
+           // نمای متوسط
+           return 0.001;
+
+         }
+
+
+         // نمای نزدیک
+         return 0.00025;
+
        }
 
 
@@ -1613,7 +1758,7 @@ import 'dart:async';
 
        List<CamelCluster> get camelClusters {
 
-         const double distance = 0.0015;
+         final distance = clusterDistance;
 
          final clusters =
              <CamelCluster>[];
@@ -1693,9 +1838,140 @@ import 'dart:async';
 
        }
 
+
+       int get totalClusterCount {
+
+         return camelClusters.length;
+
+       }
+
        List<AreaZone> get activeZones {
          return widget.zones.where((zone) => zone.isActive).toList();
        }
+
+
+      double getContainingZoneSize(
+        TagRecord record,
+      ) {
+        double baseSize = 26;
+
+
+        // اگر مختصات نداشت، اندازه امن بده
+        if (record.latitude == null || record.longitude == null) {
+          return 18;
+        }
+
+
+        // 1) اثر تعداد شترها
+        // هرچه شترها بیشتر باشند، marker کوچک‌تر می‌شود.
+        final camelCount =
+            mapRecords.length;
+
+
+        final densityFactor =
+            camelCount <= 20
+                ? 1.0
+                : camelCount <= 60
+                    ? 0.85
+                    : camelCount <= 150
+                        ? 0.70
+                        : 0.55;
+
+
+
+        // 2) اثر zoom
+        // در zoom پایین کوچک‌تر، در zoom بالا کمی بزرگ‌تر
+        final zoomFactor =
+            currentMapScale < 0.8
+                ? 0.65
+                : currentMapScale < 1.5
+                    ? 0.82
+                    : currentMapScale < 2.8
+                        ? 1.0
+                        : 1.15;
+
+
+
+        // 3) اثر محدوده دایره‌ای
+        for (final zone in activeZones) {
+          final distance =
+              math.sqrt(
+                math.pow(
+                  record.latitude! - zone.centerLatitude,
+                  2,
+                ) +
+                    math.pow(
+                      record.longitude! - zone.centerLongitude,
+                      2,
+                    ),
+              );
+
+          if (distance < 0.01) {
+            final radius =
+                zoneRadiusPixels(zone);
+
+            baseSize =
+                (radius * 0.10).clamp(14.0, 30.0);
+          }
+        }
+
+
+
+        // 4) اثر محدوده چندضلعی
+        for (final polygon in activePolygonZones) {
+          if (polygon.points.length < 3) {
+            continue;
+          }
+
+          final offsets =
+              polygon.points
+                  .map(
+                    (point) => positionForLatLng(
+                      latitude: point.latitude,
+                      longitude: point.longitude,
+                    ),
+                  )
+                  .toList();
+
+          final minX =
+              offsets.map((e) => e.dx).reduce(math.min);
+
+          final maxX =
+              offsets.map((e) => e.dx).reduce(math.max);
+
+          final minY =
+              offsets.map((e) => e.dy).reduce(math.min);
+
+          final maxY =
+              offsets.map((e) => e.dy).reduce(math.max);
+
+          final polygonVisualSize =
+              math.min(
+                maxX - minX,
+                maxY - minY,
+              );
+
+          if (polygonVisualSize > 0) {
+            baseSize =
+                (polygonVisualSize * 0.08).clamp(13.0, 32.0);
+          }
+        }
+
+
+
+        final finalSize =
+            baseSize *
+            densityFactor *
+            zoomFactor;
+
+
+        return finalSize.clamp(
+          10.0,
+          34.0,
+        );
+      }
+
+
 
        void updateCurrentScale() {
          final nextScale = transformationController.value.getMaxScaleOnAxis();
@@ -1950,161 +2226,55 @@ import 'dart:async';
          return ((radiusX + radiusY) / 2).clamp(18.0, 520.0).toDouble();
        }
 
-       Widget buildZoneShape(AreaZone zone) {
-         final center = positionForLatLng(
-           latitude: zone.centerLatitude,
-           longitude: zone.centerLongitude,
-         );
+      Widget buildZoneShape(AreaZone zone) {
 
-         final radius = zoneRadiusPixels(zone);
-         final color = zoneColor(zone);
-
-         final showLabel =
-             radius * currentMapScale > 70;
-
-         return Positioned(
-           left: center.dx - radius,
-           top: center.dy - radius,
-           child: IgnorePointer(
-             child: Container(
-               width: radius * 2,
-               height: radius * 2,
-               decoration: BoxDecoration(
-                 shape: BoxShape.circle,
-                 color: color.withOpacity(0.08),
-                 border: Border.all(
-                   color: color.withOpacity(0.55),
-                   width: 1.4,
-                 ),
-               ),
-               child: showLabel
-                   ? Center(
-                       child: Container(
-                         constraints: BoxConstraints(
-                           maxWidth: math.min(
-                             90,
-                             radius * 1.45,
-                           ),
-                         ),
-                         padding: const EdgeInsets.symmetric(
-                           horizontal: 5,
-                           vertical: 2,
-                         ),
-                         decoration: BoxDecoration(
-                           color: Colors.white.withOpacity(0.86),
-                           borderRadius: BorderRadius.circular(7),
-                           border: Border.all(
-                             color: color.withOpacity(0.18),
-                           ),
-                         ),
-                         child: Text(
-                           zone.name,
-                           maxLines: 1,
-                           overflow: TextOverflow.ellipsis,
-                           textAlign: TextAlign.center,
-                           style: TextStyle(
-                             color: color,
-                             fontWeight: FontWeight.bold,
-                             fontSize: 6.5,
-                           ),
-                         ),
-                       ),
-                     )
-                   : const SizedBox.shrink(),
-             ),
-           ),
-         );
-       }
+        final center =
+            positionForLatLng(
+              latitude: zone.centerLatitude,
+              longitude: zone.centerLongitude,
+            );
 
 
-    Widget buildClusterMarker(
-      CamelCluster cluster,
-    ) {
-
-      final point =
-          positionForLatLng(
-
-            latitude:
-                cluster.latitude,
-
-            longitude:
-                cluster.longitude,
-
-          );
+        final radius =
+            zoneRadiusPixels(zone);
 
 
-      return Positioned(
-
-        left:
-            point.dx - 18,
-
-        top:
-            point.dy - 18,
+        final color =
+            zoneColor(zone);
 
 
-        child: GestureDetector(
 
-          onTap: () {
+        return Positioned(
 
-            zoomToCluster(cluster);
+          left: center.dx - radius,
 
-          },
-
-
-          child: Container(
-
-            width:36,
-
-            height:36,
+          top: center.dy - radius,
 
 
-            decoration: BoxDecoration(
+          child: IgnorePointer(
 
-              color:
-                  const Color(0xFF086EBB),
+            child: Container(
 
-              shape:
-                  BoxShape.circle,
+              width: radius * 2,
 
-
-              border:
-                  Border.all(
-                    color: Colors.white,
-                    width: 3,
-                  ),
+              height: radius * 2,
 
 
-              boxShadow:[
+              decoration: BoxDecoration(
 
-                BoxShadow(
+                shape: BoxShape.circle,
+
+
+                color:
+                    color.withOpacity(0.08),
+
+
+                border: Border.all(
 
                   color:
-                      Colors.black.withOpacity(.25),
+                      color.withOpacity(0.55),
 
-                  blurRadius:8,
-
-                )
-
-              ],
-
-            ),
-
-
-            child: Center(
-
-              child: Text(
-
-                cluster.count.toString(),
-
-
-                style:
-                    const TextStyle(
-
-                  color:
-                      Colors.white,
-
-                  fontWeight:
-                      FontWeight.bold,
+                  width: 1.4,
 
                 ),
 
@@ -2114,11 +2284,133 @@ import 'dart:async';
 
           ),
 
-        ),
+        );
 
-      );
+      }
 
-    }
+
+
+
+   Widget buildAreaZoneLabel(
+     AreaZone zone,
+   ) {
+
+     final center =
+         positionForLatLng(
+           latitude: zone.centerLatitude,
+           longitude: zone.centerLongitude,
+         );
+
+
+     final detail =
+         currentDetailLevel;
+
+
+
+     if (detail == MapDetailLevel.low) {
+
+       return const SizedBox.shrink();
+
+     }
+
+
+
+     final text =
+         detail == MapDetailLevel.high
+             ? zone.name
+             : zone.typeText;
+
+
+
+     return Positioned(
+
+       left: center.dx - 45,
+
+       top: center.dy - 15,
+
+
+       child: IgnorePointer(
+
+         child: Container(
+
+           constraints:
+               const BoxConstraints(
+                 maxWidth: 100,
+               ),
+
+
+           padding:
+               const EdgeInsets.symmetric(
+                 horizontal: 6,
+                 vertical: 3,
+               ),
+
+
+           decoration:
+               BoxDecoration(
+
+                 color:
+                     Colors.white.withOpacity(0.85),
+
+
+                 borderRadius:
+                     BorderRadius.circular(8),
+
+
+                 border:
+                     Border.all(
+                       color:
+                           zoneColor(zone)
+                               .withOpacity(0.25),
+                     ),
+
+               ),
+
+
+           child: Text(
+
+             text,
+
+             maxLines: 1,
+
+             overflow:
+                 TextOverflow.ellipsis,
+
+
+             textAlign:
+                 TextAlign.center,
+
+
+             style:
+                 TextStyle(
+
+               color:
+                   zoneColor(zone),
+
+
+               fontWeight:
+                   FontWeight.bold,
+
+
+               fontSize:
+                   detail == MapDetailLevel.high
+                       ? 7
+                       : 5,
+
+             ),
+
+           ),
+
+         ),
+
+       ),
+
+     );
+
+   }
+
+
+
 
 
      Widget buildSelectedAreaShape() {
@@ -2221,34 +2513,288 @@ import 'dart:async';
      Widget buildPolygonZoneShape(
        PolygonZone zone,
      ) {
+
        if (!zone.isValid) {
          return const SizedBox.shrink();
        }
 
-       final offsets = zone.points
-           .map(
-             (point) => positionForLatLng(
-               latitude: point.latitude,
-               longitude: point.longitude,
-             ),
-           )
-           .toList();
 
-       return Positioned.fill(
-         child: IgnorePointer(
-           child: CustomPaint(
-             painter: _PolygonZonePainter(
-               offsets: offsets,
-               color: polygonZoneColor(zone.type),
-               title: zone.name,
-               subtitle: polygonZoneLabel(zone.type),
-               currentScale: currentMapScale,
-             ),
-           ),
-         ),
-       );
-     }
+       final offsets =
+           zone.points
+               .map(
+                 (point) => positionForLatLng(
+                   latitude: point.latitude,
+                   longitude: point.longitude,
+                 ),
+               )
+               .toList();
 
+
+
+       final minX =
+           offsets
+               .map((e) => e.dx)
+               .reduce(math.min);
+
+
+       final maxX =
+           offsets
+               .map((e) => e.dx)
+               .reduce(math.max);
+
+
+
+       final minY =
+           offsets
+               .map((e) => e.dy)
+               .reduce(math.min);
+
+
+       final maxY =
+           offsets
+               .map((e) => e.dy)
+               .reduce(math.max);
+
+
+
+              const padding = 20.0;
+
+
+
+      final localPoints =
+          offsets.map(
+            (point) => Offset(
+              point.dx - minX + padding,
+              point.dy - minY + padding,
+            ),
+          ).toList();
+
+
+
+    return Positioned(
+
+      left: minX - padding,
+
+      top: minY - padding,
+
+
+      width:
+          (maxX - minX) + (padding * 2),
+
+
+      height:
+          (maxY - minY) + (padding * 2),
+
+
+      child: GestureDetector(
+
+        onTap: () {
+
+          zoomToPolygonZone(zone);
+
+        },
+
+
+        child: SizedBox(
+
+          width:
+              (maxX - minX) + (padding * 2),
+
+
+          height:
+              (maxY - minY) + (padding * 2),
+
+
+          child: CustomPaint(
+
+            painter: _PolygonZonePainter(
+
+              offsets: localPoints,
+
+              color:
+                  polygonZoneColor(
+                    zone.type,
+                  ),
+
+            ),
+
+          ),
+
+        ),
+
+      ),
+
+    );
+
+    }
+
+
+    Widget buildPolygonZoneLabel(
+      PolygonZone zone,
+    ) {
+
+      final offsets = zone.points
+          .map(
+            (point) => positionForLatLng(
+              latitude: point.latitude,
+              longitude: point.longitude,
+            ),
+          )
+          .toList();
+
+
+      if (offsets.isEmpty) {
+        return const SizedBox.shrink();
+      }
+
+
+
+      double centerX = 0;
+      double centerY = 0;
+
+
+      for (final point in offsets) {
+
+        centerX += point.dx;
+        centerY += point.dy;
+
+      }
+
+
+      final center = Offset(
+        centerX / offsets.length,
+        centerY / offsets.length,
+      );
+
+
+
+      final detail =
+          currentDetailLevel;
+
+
+
+      // در Zoom کم هیچ متنی نداریم
+
+      if (detail == MapDetailLevel.low) {
+
+        return const SizedBox.shrink();
+
+      }
+
+
+
+      String text;
+
+
+
+      if(detail == MapDetailLevel.medium){
+
+        text =
+            polygonZoneLabel(
+              zone.type,
+            );
+
+      }
+
+      else {
+
+        text =
+            zone.name;
+
+      }
+
+
+
+      return Positioned(
+
+        left: center.dx - 50,
+
+        top: center.dy - 18,
+
+
+        child: IgnorePointer(
+
+          child: Container(
+
+            constraints:
+                const BoxConstraints(
+                 maxWidth: 80,
+                ),
+
+
+            padding:
+                const EdgeInsets.symmetric(
+                 horizontal: 4,
+                 vertical: 2,
+                ),
+
+
+            decoration:
+                BoxDecoration(
+
+                  color:
+                      Colors.white.withOpacity(
+                        0.88,
+                      ),
+
+                  borderRadius:
+                      BorderRadius.circular(10),
+
+
+                  border:
+                      Border.all(
+                        color:
+                            polygonZoneColor(
+                              zone.type,
+                            ).withOpacity(.25),
+                      ),
+
+                ),
+
+
+            child: Text(
+
+              text,
+
+              maxLines: 1,
+
+              overflow:
+                  TextOverflow.ellipsis,
+
+
+              textAlign:
+                  TextAlign.center,
+
+
+              style:
+                  TextStyle(
+
+               fontSize:
+                   detail == MapDetailLevel.high
+                       ? 8
+                       : 6,
+
+
+                fontWeight:
+                    FontWeight.bold,
+
+
+                color:
+                    polygonZoneColor(
+                      zone.type,
+                    ),
+
+              ),
+
+            ),
+
+          ),
+
+        ),
+
+      );
+
+    }
 
 
       void fitAll(Size size) {
@@ -2305,48 +2851,158 @@ import 'dart:async';
 
 
 
-       void zoomToCluster(
-         CamelCluster cluster,
-       ) {
 
-         final center =
-             positionForLatLng(
+        void zoomToPolygonZone(
+          PolygonZone zone,
+        ) {
 
-               latitude:
-                   cluster.latitude,
-
-               longitude:
-                   cluster.longitude,
-
-             );
+          if (zone.points.isEmpty) {
+            return;
+          }
 
 
-         const zoomScale = 3.5;
-
-
-         final dx =
-             viewportSize.width / 2 -
-             center.dx * zoomScale;
-
-
-         final dy =
-             viewportSize.height / 2 -
-             center.dy * zoomScale;
+          final points =
+              zone.points
+                  .map(
+                    (point) =>
+                        positionForLatLng(
+                          latitude: point.latitude,
+                          longitude: point.longitude,
+                        ),
+                  )
+                  .toList();
 
 
 
-         transformationController.value =
-             Matrix4.identity()
-               ..translate(dx,dy)
-               ..scale(zoomScale);
+          final minX =
+              points.map((e) => e.dx).reduce(math.min);
+
+          final maxX =
+              points.map((e) => e.dx).reduce(math.max);
 
 
-         currentMapScale = zoomScale;
+          final minY =
+              points.map((e) => e.dy).reduce(math.min);
 
 
-         setState(() {});
+          final maxY =
+              points.map((e) => e.dy).reduce(math.max);
 
-       }
+
+
+          final centerX =
+              (minX + maxX) / 2;
+
+
+          final centerY =
+              (minY + maxY) / 2;
+
+
+
+          final polygonWidth =
+              maxX - minX;
+
+
+          final polygonHeight =
+              maxY - minY;
+
+
+
+          if (viewportSize.width <= 0 ||
+              viewportSize.height <= 0) {
+            return;
+          }
+
+
+
+          final scaleX =
+              viewportSize.width /
+              polygonWidth;
+
+
+          final scaleY =
+              viewportSize.height /
+              polygonHeight;
+
+
+
+          final targetScale =
+              math.min(scaleX, scaleY) * 0.65;
+
+
+
+          final scale =
+              targetScale.clamp(
+                1.2,
+                5.0,
+              );
+
+
+
+          final dx =
+              viewportSize.width / 2 -
+              centerX * scale;
+
+
+          final dy =
+              viewportSize.height / 2 -
+              centerY * scale;
+
+
+
+          transformationController.value =
+              Matrix4.identity()
+                ..translate(dx, dy)
+                ..scale(scale);
+
+
+
+          currentMapScale = scale;
+
+        }
+
+
+
+      void zoomToCluster(
+        CamelCluster cluster,
+      ) {
+
+        final center =
+            positionForLatLng(
+              latitude: cluster.latitude,
+              longitude: cluster.longitude,
+            );
+
+
+        const zoomScale = 2.8;
+
+
+        final dx =
+            viewportSize.width / 2 -
+            center.dx * zoomScale;
+
+
+        final dy =
+            viewportSize.height / 2 -
+            center.dy * zoomScale;
+
+
+
+        transformationController.value =
+            Matrix4.identity()
+              ..translate(dx, dy)
+              ..scale(zoomScale);
+
+
+
+        setState(() {
+
+          currentMapScale = zoomScale;
+
+        });
+
+      }
+
 
 
       void changeZoom(double factor) {
@@ -2430,13 +3086,18 @@ import 'dart:async';
              currentDetailLevel;
 
 
+        final markerSize =
+             detail == MapDetailLevel.high
+                 ? 30.0
+              : detail == MapDetailLevel.medium
+                  ? 24.0
+                  : 18.0;
 
-         final markerSize =
-             detail == MapDetailLevel.low
-                 ? 14.0
-                 : detail == MapDetailLevel.medium
-                     ? 24.0
-                     : 34.0;
+
+final bool showCamelNumber =
+    currentMapScale > 2.0;
+
+
 
 
 
@@ -2536,7 +3197,7 @@ import 'dart:async';
 
 
 
-                 if (detail != MapDetailLevel.low)
+                 if (showCamelNumber)
 
                    Container(
 
@@ -2566,36 +3227,23 @@ import 'dart:async';
                          ),
 
 
-                     child:
+                     child: showCamelNumber
 
-                         Text(
+                         ? Text(
+                             record.camelNo,
 
-                           record.camelNo,
+                             style: TextStyle(
+                               color: const Color(0xFF062C5E),
+                               fontWeight: FontWeight.bold,
+                               fontSize:
+                                   detail == MapDetailLevel.high
+                                       ? 9
+                                       : 7,
+                             ),
 
+                           )
 
-                           style:
-                               TextStyle(
-
-                             fontSize:
-                                 detail ==
-                                         MapDetailLevel.high
-                                     ? 8
-                                     : 6,
-
-
-                             fontWeight:
-                                 FontWeight.bold,
-
-
-                             color:
-                                 const Color(
-                                   0xFF062C5E,
-                                 ),
-
-                           ),
-
-                         ),
-
+                         : const SizedBox.shrink(),
                    ),
 
                ],
@@ -2608,6 +3256,118 @@ import 'dart:async';
 
        }
 
+
+
+
+
+
+       Widget buildClusterMarker(
+         CamelCluster cluster,
+       ) {
+
+         final point =
+             positionForLatLng(
+
+               latitude:
+                   cluster.latitude,
+
+               longitude:
+                   cluster.longitude,
+
+             );
+
+             final clusterSize =
+                 currentMapScale < 1
+                     ? 28.0
+                     : currentMapScale < 2
+                         ? 34.0
+                         : 42.0;
+
+
+         return Positioned(
+
+        left: point.dx - clusterSize / 2,
+        top: point.dy - clusterSize / 2,
+
+
+           child: GestureDetector(
+
+             onTap: () {
+
+               zoomToCluster(cluster);
+
+             },
+
+
+             child: Container(
+
+           width: clusterSize,
+           height: clusterSize,
+
+               decoration: BoxDecoration(
+
+                 color:
+                     const Color(0xFF086EBB),
+
+
+                 shape:
+                     BoxShape.circle,
+
+
+                 border:
+                     Border.all(
+                       color: Colors.white,
+                       width: 3,
+                     ),
+
+
+                 boxShadow: [
+
+                   BoxShadow(
+
+                     color:
+                         Colors.black.withOpacity(.25),
+
+                     blurRadius: 10,
+
+                   )
+
+                 ],
+
+               ),
+
+
+               child: Center(
+
+                 child: Text(
+
+                   cluster.count.toString(),
+
+
+                   style:
+                       const TextStyle(
+
+                     color:
+                         Colors.white,
+
+                     fontWeight:
+                         FontWeight.bold,
+
+                     fontSize: 14,
+
+                   ),
+
+                 ),
+
+               ),
+
+             ),
+
+           ),
+
+         );
+
+       }
 
 
 
@@ -2834,16 +3594,25 @@ import 'dart:async';
 
                                 ...activePolygonZones.map(buildPolygonZoneShape),
 
+                                ...activePolygonZones.map(buildPolygonZoneLabel),
+
                                 ...activeZones.map(buildZoneShape),
 
-                               if(currentDetailLevel == MapDetailLevel.low)
-
-                                 ...camelClusters.map(buildClusterMarker)
+                                ...activeZones.map(buildAreaZoneLabel),
 
 
-                               else
 
-                                 ...mapRecords.map(buildTagMarker)
+                              if (showClusters)
+
+                                ...camelClusters.map(
+                                  buildClusterMarker,
+                                )
+
+                              else
+
+                                ...mapRecords.map(
+                                  buildTagMarker,
+                                ),
                               ],
                              ),
                            ),
@@ -3037,16 +3806,11 @@ import 'dart:async';
     class _PolygonZonePainter extends CustomPainter {
       final List<Offset> offsets;
       final Color color;
-      final String title;
-      final String subtitle;
-      final double currentScale;
+
 
       const _PolygonZonePainter({
         required this.offsets,
         required this.color,
-        required this.title,
-        required this.subtitle,
-        required this.currentScale,
       });
 
       @override
@@ -3116,152 +3880,6 @@ import 'dart:async';
               ..strokeWidth = 1.2,
           );
         }
-
-
-
-        final bounds = _calculateBounds();
-
-
-        final screenWidth =
-            bounds.width * currentScale;
-
-        final screenHeight =
-            bounds.height * currentScale;
-
-
-        // اگر محدوده کوچک است، لیبل نمایش نده
-        if (screenWidth < 75 ||
-            screenHeight < 42) {
-          return;
-        }
-
-
-        final center = _calculateCenter();
-
-
-        final safeTitle =
-            _shortText(title, 14);
-
-        final safeSubtitle =
-            _shortText(subtitle, 10);
-
-
-
-        final textPainter = TextPainter(
-
-          text: TextSpan(
-
-            children: [
-
-              TextSpan(
-                text: safeTitle,
-
-                style: TextStyle(
-                  color: color,
-                  fontSize: 6.2,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-
-
-              TextSpan(
-
-                text: '\n$safeSubtitle',
-
-                style: TextStyle(
-                  color: color.withOpacity(0.7),
-                  fontSize: 4.8,
-                  fontWeight: FontWeight.w600,
-                ),
-
-              ),
-
-            ],
-
-          ),
-
-          textDirection: TextDirection.rtl,
-
-          textAlign: TextAlign.center,
-
-        );
-
-
-        textPainter.layout(
-          maxWidth: 70,
-        );
-
-
-
-        final labelRect =
-            Rect.fromLTWH(
-
-              center.dx -
-                  textPainter.width / 2 -
-                  5,
-
-              center.dy -
-                  textPainter.height / 2 -
-                  3,
-
-              textPainter.width + 10,
-
-              textPainter.height + 6,
-
-            );
-
-
-
-        final labelRRect =
-            RRect.fromRectAndRadius(
-              labelRect,
-              const Radius.circular(6),
-            );
-
-
-
-        canvas.drawRRect(
-
-          labelRRect,
-
-          Paint()
-            ..color =
-                Colors.white.withOpacity(0.80)
-            ..style =
-                PaintingStyle.fill,
-
-        );
-
-
-
-        canvas.drawRRect(
-
-          labelRRect,
-
-          Paint()
-            ..color =
-                color.withOpacity(0.18)
-            ..style =
-                PaintingStyle.stroke
-            ..strokeWidth = 0.7,
-
-        );
-
-
-
-        textPainter.paint(
-
-          canvas,
-
-          Offset(
-            center.dx -
-                textPainter.width / 2,
-
-            center.dy -
-                textPainter.height / 2,
-          ),
-
-        );
 
       }
 
@@ -3359,19 +3977,15 @@ import 'dart:async';
 
 
 
-      @override
-      bool shouldRepaint(
-        covariant _PolygonZonePainter oldDelegate,
-      ) {
+     @override
+     bool shouldRepaint(
+       covariant _PolygonZonePainter oldDelegate,
+     ) {
 
-        return oldDelegate.offsets != offsets ||
-            oldDelegate.color != color ||
-            oldDelegate.title != title ||
-            oldDelegate.subtitle != subtitle ||
-            oldDelegate.currentScale != currentScale;
+       return oldDelegate.offsets != offsets ||
+           oldDelegate.color != color;
 
-      }
-
+     }
     }
 
 
