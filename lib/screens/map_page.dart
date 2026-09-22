@@ -1,6 +1,7 @@
 import 'dart:async';
      import 'dart:convert';
      import 'dart:math' as math;
+     import 'dart:io';
 
      import 'package:flutter/material.dart';
      import 'package:flutter/services.dart';
@@ -21,6 +22,8 @@ import 'dart:async';
      import '../models/geo_point.dart';
      import '../services/kml_import_service.dart';
      import '../services/geo_area_service.dart';
+     import '../models/camel_detail.dart';
+     import '../services/camel_detail_service.dart';
 
 
 
@@ -1540,6 +1543,10 @@ import 'dart:async';
        Size viewportSize = Size.zero;
        bool didFitInitialView = false;
        double currentMapScale = 1.0;
+       bool showSelectedCamelPhoto = false;
+       CamelDetail? selectedCamelDetail;
+       bool isLoadingSelectedCamelDetail = false;
+       String? selectedCamelPhotoError;
 
 
        bool get showClusters {
@@ -2829,24 +2836,40 @@ double zoneScaleForRecord(TagRecord record) {
          });
        }
 
-       void zoomToRecord(TagRecord record) {
-         if (viewportSize.width <= 0 || viewportSize.height <= 0) return;
+      void zoomToRecord(
+        TagRecord record, {
+        bool showPhoto = false,
+      }) {
+        if (viewportSize.width <= 0 || viewportSize.height <= 0) return;
 
-         final point = positionFor(record);
-         const zoomScale = 3.4;
+        final point = positionFor(record);
 
-         final dx = viewportSize.width / 2 - point.dx * zoomScale;
-         final dy = viewportSize.height / 2 - point.dy * zoomScale;
+        const zoomScale = 3.4;
 
-         setState(() {
-           selectedRecord = record;
-           transformationController.value = Matrix4.identity()
-             ..translate(dx, dy)
-             ..scale(zoomScale);
+        final dx = viewportSize.width / 2 - point.dx * zoomScale;
+        final dy = viewportSize.height / 2 - point.dy * zoomScale;
 
-           currentMapScale = zoomScale;
-         });
-       }
+        setState(() {
+          selectedRecord = record;
+          showSelectedCamelPhoto = showPhoto;
+
+          if (!showPhoto) {
+            selectedCamelDetail = null;
+            selectedCamelPhotoError = null;
+            isLoadingSelectedCamelDetail = false;
+          }
+
+          transformationController.value = Matrix4.identity()
+            ..translate(dx, dy)
+            ..scale(zoomScale);
+
+          currentMapScale = zoomScale;
+        });
+
+        if (showPhoto) {
+          loadSelectedCamelDetail(record);
+        }
+      }
 
 
 
@@ -3060,203 +3083,270 @@ double zoneScaleForRecord(TagRecord record) {
          );
        }
 
-       Widget buildTagMarker(TagRecord record) {
 
-         final point = positionFor(record);
+        double get safeMapScale {
+          if (currentMapScale.isNaN ||
+              currentMapScale.isInfinite ||
+              currentMapScale <= 0) {
+            return 1.0;
+          }
+
+          return currentMapScale;
+        }
+
+        double screenToScene(double value) {
+          return value / safeMapScale;
+        }
+
+        double camelMarkerScreenSize(
+          MapDetailLevel detail,
+        ) {
+          final count = mapRecords.length;
+
+          if (count > 250) {
+            return detail == MapDetailLevel.high
+                ? 10.0
+                : detail == MapDetailLevel.medium
+                    ? 8.0
+                    : 6.0;
+          }
+
+          if (count > 80) {
+            return detail == MapDetailLevel.high
+                ? 12.0
+                : detail == MapDetailLevel.medium
+                    ? 9.0
+                    : 7.0;
+          }
+
+          return detail == MapDetailLevel.high
+              ? 14.0
+              : detail == MapDetailLevel.medium
+                  ? 11.0
+                  : 8.0;
+        }
+
+        bool shouldShowCamelNumberOnMap() {
+          final count = mapRecords.length;
+
+          if (currentMapScale < 2.4) {
+            return false;
+          }
+
+          if (count <= 40) {
+            return true;
+          }
+
+          if (count <= 120) {
+            return currentMapScale >= 3.2;
+          }
+
+          return currentMapScale >= 5.0;
+        }
+
+        double camelNumberScreenFontSize() {
+          final count = mapRecords.length;
+
+          if (count > 150) {
+            return 5.5;
+          }
+
+          if (count > 60) {
+            return 6.0;
+          }
+
+          return 6.5;
+        }
+
+        Offset spreadPointForRecord(
+          TagRecord record,
+        ) {
+          final basePoint = positionFor(record);
+
+          final threshold =
+              screenToScene(10);
+
+          final nearRecords =
+              mapRecords.where(
+                (other) {
+                  final otherPoint =
+                      positionFor(other);
+
+                  return (otherPoint - basePoint).distance <= threshold;
+                },
+              ).toList();
+
+          if (nearRecords.length <= 1) {
+            return basePoint;
+          }
+
+          nearRecords.sort(
+            (a, b) {
+              final camelCompare =
+                  a.camelNo.compareTo(b.camelNo);
+
+              if (camelCompare != 0) {
+                return camelCompare;
+              }
+
+              return a.tagId.compareTo(b.tagId);
+            },
+          );
+
+          final index =
+              nearRecords.indexWhere(
+                (other) => isSameRecord(
+                  other,
+                  record,
+                ),
+              );
+
+          if (index < 0) {
+            return basePoint;
+          }
+
+          final ring =
+              math.min(
+                (index ~/ 8) + 1,
+                3,
+              );
+
+          final indexInRing =
+              index % 8;
+
+          final angle =
+              (math.pi * 2 * indexInRing) / 8;
+
+          final radius =
+              screenToScene(
+                9.0 * ring,
+              );
+
+          return Offset(
+            basePoint.dx + math.cos(angle) * radius,
+            basePoint.dy + math.sin(angle) * radius,
+          );
+        }
 
 
-         final isLowBattery =
-             record.isBatteryLow;
+      Widget buildTagMarker(TagRecord record) {
+        final point =
+            spreadPointForRecord(record);
 
+        final isLowBattery =
+            record.isBatteryLow;
 
-         final isUnlocked =
-             record.lock == 0;
+        final isUnlocked =
+            record.lock == 0;
 
+        final color =
+            isUnlocked
+                ? const Color(0xFFD32F2F)
+                : isLowBattery
+                    ? const Color(0xFFE87500)
+                    : const Color(0xFF008B62);
 
+        final detail =
+            currentDetailLevel;
 
-         final color = isUnlocked
-             ? const Color(0xFFD32F2F)
-             : isLowBattery
-                 ? const Color(0xFFE87500)
-                 : const Color(0xFF008B62);
-
-
-
-         final detail =
-             currentDetailLevel;
-
+        final markerScreenSize =
+            camelMarkerScreenSize(detail);
 
         final markerSize =
-             detail == MapDetailLevel.high
-                 ? 30.0
-              : detail == MapDetailLevel.medium
-                  ? 24.0
-                  : 18.0;
-
-
-final bool showCamelNumber =
-    currentMapScale > 2.0;
-
-
-
-
-
-         return Positioned(
-
-           left: point.dx - markerSize / 2,
-
-           top: point.dy - markerSize / 2,
-
-
-           child: GestureDetector(
-
-             onTap: () {
-
-               zoomToRecord(record);
-
-             },
-
-
-             child: Column(
-
-               mainAxisSize:
-                   MainAxisSize.min,
-
-
-               children: [
-
-
-                 Container(
-
-                   width: markerSize,
-
-                   height: markerSize,
-
-
-                   decoration: BoxDecoration(
-
-                     color: color,
-
-                     shape:
-                         BoxShape.circle,
-
-
-                     border: Border.all(
-
-                       color: Colors.white,
-
-                       width: detail ==
-                               MapDetailLevel.high
-                           ? 3
-                           : 1.5,
-
-                     ),
-
-
-                     boxShadow: [
-
-                       BoxShadow(
-
-                         color:
-                             color.withOpacity(0.35),
-
-                         blurRadius: 8,
-
-                       )
-
-                     ],
-
-                   ),
-
-
-                   child: detail ==
-                           MapDetailLevel.low
-
-                       ? null
-
-                       : Icon(
-
-                           isUnlocked
-                               ? Icons.lock_open_rounded
-                               : Icons.pets_rounded,
-
-
-                           color:
-                               Colors.white,
-
-
-                           size:
-                               detail ==
-                                       MapDetailLevel.high
-                                   ? 18
-                                   : 12,
-
-                         ),
-
-                 ),
-
-
-
-                 if (showCamelNumber)
-
-                   Container(
-
-                     margin:
-                         const EdgeInsets.only(
-                           top: 2,
-                         ),
-
-
-                     padding:
-                         const EdgeInsets.symmetric(
-                           horizontal: 3,
-                         ),
-
-
-                     decoration:
-                         BoxDecoration(
-
-                           color:
-                               Colors.white.withOpacity(
-                                 0.85,
-                               ),
-
-                           borderRadius:
-                               BorderRadius.circular(5),
-
-                         ),
-
-
-                     child: showCamelNumber
-
-                         ? Text(
-                             record.camelNo,
-
-                             style: TextStyle(
-                               color: const Color(0xFF062C5E),
-                               fontWeight: FontWeight.bold,
-                               fontSize:
-                                   detail == MapDetailLevel.high
-                                       ? 9
-                                       : 7,
-                             ),
-
-                           )
-
-                         : const SizedBox.shrink(),
-                   ),
-
-               ],
-
-             ),
-
-           ),
-
-         );
-
-       }
-
-
+            screenToScene(markerScreenSize);
+
+        final iconSize =
+            screenToScene(markerScreenSize * 0.55);
+
+        final borderWidth =
+            screenToScene(
+              detail == MapDetailLevel.high ? 1.2 : 0.8,
+            );
+
+        final showCamelNumber =
+            shouldShowCamelNumberOnMap();
+
+        return Positioned(
+          left: point.dx - markerSize / 2,
+          top: point.dy - markerSize / 2,
+
+          child: GestureDetector(
+            onTap: () {
+              zoomToRecord(
+                record,
+                showPhoto: false,
+              );
+            },
+
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: markerSize,
+                  height: markerSize,
+
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+
+                    border: Border.all(
+                      color: Colors.white,
+                      width: borderWidth,
+                    ),
+
+                    boxShadow: [
+                      BoxShadow(
+                        color: color.withOpacity(0.28),
+                        blurRadius: screenToScene(4),
+                      ),
+                    ],
+                  ),
+
+                  child: detail == MapDetailLevel.low
+                      ? null
+                      : Icon(
+                          isUnlocked
+                              ? Icons.lock_open_rounded
+                              : Icons.pets_rounded,
+                          color: Colors.white,
+                          size: iconSize,
+                        ),
+                ),
+
+                if (showCamelNumber)
+                  Container(
+                    margin: EdgeInsets.only(
+                      top: screenToScene(1.5),
+                    ),
+
+                    padding: EdgeInsets.symmetric(
+                      horizontal: screenToScene(2.5),
+                      vertical: screenToScene(0.8),
+                    ),
+
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.82),
+                      borderRadius: BorderRadius.circular(
+                        screenToScene(3),
+                      ),
+                    ),
+
+                    child: Text(
+                      record.camelNo,
+                      style: TextStyle(
+                        color: const Color(0xFF062C5E),
+                        fontWeight: FontWeight.bold,
+                        fontSize: screenToScene(
+                          camelNumberScreenFontSize(),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      }
 
 
 
@@ -3369,11 +3459,69 @@ final bool showCamelNumber =
 
        }
 
+        Future<void> loadSelectedCamelDetail(
+          TagRecord record,
+        ) async {
+          setState(() {
+            isLoadingSelectedCamelDetail = true;
+            selectedCamelDetail = null;
+            selectedCamelPhotoError = null;
+          });
 
+          try {
+            final detail =
+                await CamelDetailService.getDetailByTagId(
+                  record.tagId,
+                );
+
+            if (!mounted) return;
+
+            final rawPhotoPath =
+                detail?.photoPath;
+
+            final photoPath =
+                rawPhotoPath == null
+                    ? ''
+                    : rawPhotoPath.trim();
+
+            setState(() {
+              selectedCamelDetail = detail;
+              isLoadingSelectedCamelDetail = false;
+
+              if (detail == null) {
+                selectedCamelPhotoError =
+                    'برای تگ ${record.tagId} اطلاعات شتر ثبت نشده است.';
+              } else if (photoPath.isEmpty) {
+                selectedCamelPhotoError =
+                    'برای این شتر عکس ثبت نشده است.';
+              } else if (!File(photoPath).existsSync()) {
+                selectedCamelPhotoError =
+                    'فایل عکس در حافظه پیدا نشد.';
+              }
+            });
+          } catch (_) {
+            if (!mounted) return;
+
+            setState(() {
+              isLoadingSelectedCamelDetail = false;
+              selectedCamelPhotoError =
+                  'خطا در خواندن اطلاعات شتر.';
+            });
+          }
+        }
 
 
        Widget buildSelectedRecordPanel(BuildContext context) {
          final record = selectedRecord;
+
+
+         final rawPhotoPath =
+             selectedCamelDetail?.photoPath;
+
+         final selectedPhotoPath =
+             rawPhotoPath == null
+                 ? ''
+                 : rawPhotoPath.trim();
 
          if (record == null) {
            return Container(
@@ -3456,6 +3604,44 @@ final bool showCamelNumber =
                    ),
                  ],
                ),
+              if (showSelectedCamelPhoto) ...[
+                const SizedBox(height: 10),
+
+                Container(
+                  width: double.infinity,
+                  height: 150,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.92),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: const Color(0xFFC8EBDD),
+                    ),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+
+                  child: isLoadingSelectedCamelDetail
+                      ? const Center(
+                          child: CircularProgressIndicator(),
+                        )
+                      : selectedPhotoPath.isNotEmpty &&
+                              File(selectedPhotoPath).existsSync()
+                          ? Image.file(
+                              File(selectedPhotoPath),
+                              fit: BoxFit.cover,
+                            )
+                          : Center(
+                              child: Text(
+                                selectedCamelPhotoError ??
+                                    'عکس شتر پیدا نشد.',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.black54,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                ),
+              ],
                const SizedBox(height: 8),
                Directionality(
                  textDirection: TextDirection.ltr,
@@ -3510,9 +3696,12 @@ final bool showCamelNumber =
                maxLines: 1,
                overflow: TextOverflow.ellipsis,
              ),
-             onSelected: (_) {
-               zoomToRecord(record);
-             },
+            onSelected: (_) {
+              zoomToRecord(
+                record,
+                showPhoto: true,
+              );
+            },
            ),
          );
        }
