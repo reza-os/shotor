@@ -1346,6 +1346,7 @@ import 'dart:async';
                                          else
                                        SimpleGpsMap(
                                          records: gpsList,
+                                         trackRecords: gpsRecords,
                                          zones: activeMapZones,
                                          area: currentArea,
                                          polygonZones: polygonZones,
@@ -1512,19 +1513,23 @@ import 'dart:async';
 
 
 
-     class SimpleGpsMap extends StatefulWidget {
-       final List<TagRecord> records;
-       final List<AreaZone> zones;
-       final GeoArea? area;
-       final List<PolygonZone> polygonZones;
+  class SimpleGpsMap extends StatefulWidget {
+    final List<TagRecord> records;
+    final List<TagRecord> trackRecords;
+    final List<AreaZone> zones;
+    final GeoArea? area;
+    final List<PolygonZone> polygonZones;
 
-       const SimpleGpsMap({
-         super.key,
-         required this.records,
-         this.zones = const [],
-         this.area,
-         this.polygonZones = const [],
-       });
+      const SimpleGpsMap({
+        super.key,
+        required this.records,
+        required this.trackRecords,
+        this.zones = const [],
+        this.area,
+        this.polygonZones = const [],
+      });
+
+
 
        @override
        State<SimpleGpsMap> createState() => _SimpleGpsMapState();
@@ -1547,6 +1552,12 @@ import 'dart:async';
        CamelDetail? selectedCamelDetail;
        bool isLoadingSelectedCamelDetail = false;
        String? selectedCamelPhotoError;
+       TagRecord? routeRecord;
+       List<TagRecord> routeRecords = [];
+
+       bool get isRouteMode {
+         return routeRecord != null;
+       }
 
 
        bool get showClusters {
@@ -1762,6 +1773,33 @@ double zoneScaleForRecord(TagRecord record) {
          }).take(50).toList();
        }
 
+       List<TagRecord> get visibleMapRecords {
+         final selectedRoute = routeRecord;
+
+         if (selectedRoute == null) {
+           return mapRecords;
+         }
+
+         final selected = mapRecords.where((record) {
+           return record.tagId == selectedRoute.tagId;
+         }).toList();
+
+         if (selected.isNotEmpty) {
+           return [
+             selected.first,
+           ];
+         }
+
+         if (selectedRoute.latitude != null &&
+             selectedRoute.longitude != null) {
+           return [
+             selectedRoute,
+           ];
+         }
+
+         return [];
+       }
+
 
        List<CamelCluster> get camelClusters {
 
@@ -1771,7 +1809,7 @@ double zoneScaleForRecord(TagRecord record) {
              <CamelCluster>[];
 
 
-         for (final record in mapRecords) {
+         for (final record in visibleMapRecords) {
 
 
            if (record.latitude == null ||
@@ -2088,6 +2126,20 @@ double zoneScaleForRecord(TagRecord record) {
         }
 
         for (final record in mapRecords) {
+          points.add(
+            _GpsPoint(
+              latitude: record.latitude!,
+              longitude: record.longitude!,
+            ),
+          );
+        }
+
+
+        for (final record in routeRecords) {
+          if (record.latitude == null || record.longitude == null) {
+            continue;
+          }
+
           points.add(
             _GpsPoint(
               latitude: record.latitude!,
@@ -2825,6 +2877,130 @@ double zoneScaleForRecord(TagRecord record) {
         currentMapScale = scale;
       }
 
+
+
+      DateTime? routeDateTime(TagRecord record) {
+        final text = record.receivedDateTime.trim();
+
+        if (text.isEmpty) {
+          return null;
+        }
+
+        return DateTime.tryParse(text);
+      }
+
+      void showRouteForRecord(TagRecord record) {
+        final points = widget.trackRecords.where((item) {
+          return item.tagId == record.tagId &&
+              item.latitude != null &&
+              item.longitude != null;
+        }).toList();
+
+        points.sort((a, b) {
+          final aTime = routeDateTime(a);
+          final bTime = routeDateTime(b);
+
+          if (aTime == null && bTime == null) {
+            return 0;
+          }
+
+          if (aTime == null) {
+            return 1;
+          }
+
+          if (bTime == null) {
+            return -1;
+          }
+
+          return aTime.compareTo(bTime);
+        });
+
+        setState(() {
+          routeRecord = record;
+          routeRecords = points;
+          selectedRecord = record;
+          showSelectedCamelPhoto = false;
+          selectedCamelDetail = null;
+          selectedCamelPhotoError = null;
+          isLoadingSelectedCamelDetail = false;
+        });
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+
+          if (routeRecords.length >= 2) {
+            zoomToRoute(routeRecords);
+          } else {
+            zoomToRecord(record);
+          }
+        });
+      }
+
+      void clearRouteMode() {
+        setState(() {
+          routeRecord = null;
+          routeRecords = [];
+        });
+      }
+
+      void zoomToRoute(List<TagRecord> records) {
+        if (records.isEmpty ||
+            viewportSize.width <= 0 ||
+            viewportSize.height <= 0) {
+          return;
+        }
+
+        final points = records
+            .where((record) {
+              return record.latitude != null && record.longitude != null;
+            })
+            .map(positionFor)
+            .toList();
+
+        if (points.isEmpty) {
+          return;
+        }
+
+        double minX = points.first.dx;
+        double maxX = points.first.dx;
+        double minY = points.first.dy;
+        double maxY = points.first.dy;
+
+        for (final point in points) {
+          if (point.dx < minX) minX = point.dx;
+          if (point.dx > maxX) maxX = point.dx;
+          if (point.dy < minY) minY = point.dy;
+          if (point.dy > maxY) maxY = point.dy;
+        }
+
+        final routeWidth = (maxX - minX).abs().clamp(40.0, sceneWidth);
+        final routeHeight = (maxY - minY).abs().clamp(40.0, sceneHeight);
+
+        final scaleX = viewportSize.width / routeWidth;
+        final scaleY = viewportSize.height / routeHeight;
+
+        final scale = (math.min(scaleX, scaleY) * 0.55)
+            .clamp(1.2, 5.0)
+            .toDouble();
+
+        final centerX = (minX + maxX) / 2;
+        final centerY = (minY + maxY) / 2;
+
+        final dx = viewportSize.width / 2 - centerX * scale;
+        final dy = viewportSize.height / 2 - centerY * scale;
+
+        transformationController.value = Matrix4.identity()
+          ..translate(dx, dy)
+          ..scale(scale);
+
+        setState(() {
+          currentMapScale = scale;
+        });
+      }
+
+
+
+
        void scheduleFitAll(Size size) {
          if (didFitInitialView) return;
 
@@ -3166,9 +3342,9 @@ double zoneScaleForRecord(TagRecord record) {
           final threshold =
               screenToScene(10);
 
-          final nearRecords =
-              mapRecords.where(
-                (other) {
+         final nearRecords =
+             visibleMapRecords.where(
+               (other) {
                   final otherPoint =
                       positionFor(other);
 
@@ -3666,6 +3842,36 @@ double zoneScaleForRecord(TagRecord record) {
                    fontSize: 12,
                  ),
                ),
+               const SizedBox(height: 10),
+
+               if (routeRecord?.tagId == record.tagId)
+                 SizedBox(
+                   width: double.infinity,
+                   height: 42,
+                   child: OutlinedButton.icon(
+                     onPressed: clearRouteMode,
+                     icon: const Icon(Icons.close_rounded),
+                     label: Text(
+                       'بستن مسیر (${routeRecords.length} نقطه)',
+                     ),
+                   ),
+                 )
+               else
+                 SizedBox(
+                   width: double.infinity,
+                   height: 42,
+                   child: ElevatedButton.icon(
+                     onPressed: () {
+                       showRouteForRecord(record);
+                     },
+                     icon: const Icon(Icons.route_rounded),
+                     label: const Text('نمایش مسیر امروز'),
+                     style: ElevatedButton.styleFrom(
+                       backgroundColor: const Color(0xFF008B62),
+                       foregroundColor: Colors.white,
+                     ),
+                   ),
+                 ),
              ],
            ),
          );
@@ -3789,17 +3995,33 @@ double zoneScaleForRecord(TagRecord record) {
 
                                 ...activeZones.map(buildAreaZoneLabel),
 
+                                if (routeRecords.isNotEmpty)
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      child: CustomPaint(
+                                        painter: _CamelRoutePainter(
+                                          points: routeRecords
+                                              .where((record) {
+                                                return record.latitude != null &&
+                                                    record.longitude != null;
+                                              })
+                                              .map(positionFor)
+                                              .toList(),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
 
-
-                              if (showClusters)
-
+                              if (isRouteMode)
+                                ...visibleMapRecords.map(
+                                  buildTagMarker,
+                                )
+                              else if (showClusters)
                                 ...camelClusters.map(
                                   buildClusterMarker,
                                 )
-
                               else
-
-                                ...mapRecords.map(
+                                ...visibleMapRecords.map(
                                   buildTagMarker,
                                 ),
                               ],
@@ -3820,7 +4042,9 @@ double zoneScaleForRecord(TagRecord record) {
                              borderRadius: BorderRadius.circular(12),
                            ),
                            child: Text(
-                            '${mapRecords.length} شتر • ${activePolygonZones.length} محدوده داخلی',
+                            isRouteMode
+                                ? 'مسیر شتر ${routeRecord!.camelNo} • ${routeRecords.length} نقطه'
+                                : '${mapRecords.length} شتر • ${activePolygonZones.length} محدوده داخلی',
                              style: const TextStyle(
                                color: Color(0xFF062C5E),
                                fontWeight: FontWeight.bold,
@@ -4740,6 +4964,104 @@ class GpsRecordCard extends StatelessWidget {
     );
   }
 }
+
+
+
+
+
+class _CamelRoutePainter extends CustomPainter {
+  final List<Offset> points;
+
+  const _CamelRoutePainter({
+    required this.points,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.isEmpty) {
+      return;
+    }
+
+    if (points.length >= 2) {
+      final path = Path()
+        ..moveTo(
+          points.first.dx,
+          points.first.dy,
+        );
+
+      for (final point in points.skip(1)) {
+        path.lineTo(
+          point.dx,
+          point.dy,
+        );
+      }
+
+      final shadowPaint = Paint()
+        ..color = Colors.white.withOpacity(0.85)
+        ..strokeWidth = 8
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+
+      final routePaint = Paint()
+        ..color = const Color(0xFF008B62)
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+
+      canvas.drawPath(path, shadowPaint);
+      canvas.drawPath(path, routePaint);
+    }
+
+    final pointPaint = Paint()
+      ..color = const Color(0xFF008B62)
+      ..style = PaintingStyle.fill;
+
+    for (final point in points) {
+      canvas.drawCircle(
+        point,
+        3,
+        pointPaint,
+      );
+    }
+
+    final start = points.first;
+    final end = points.last;
+
+    canvas.drawCircle(
+      start,
+      8,
+      Paint()..color = Colors.white,
+    );
+
+    canvas.drawCircle(
+      start,
+      5,
+      Paint()..color = const Color(0xFF008B62),
+    );
+
+    canvas.drawCircle(
+      end,
+      9,
+      Paint()..color = Colors.white,
+    );
+
+    canvas.drawCircle(
+      end,
+      6,
+      Paint()..color = const Color(0xFFD32F2F),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _CamelRoutePainter oldDelegate) {
+    return oldDelegate.points != points;
+  }
+}
+
+
+
 
 class _GpsCardMiniBadge extends StatelessWidget {
   final IconData icon;
