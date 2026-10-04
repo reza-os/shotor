@@ -1169,6 +1169,15 @@ import 'dart:async';
        Widget build(BuildContext context) {
          final gpsList = latestGpsRecordsByTag;
          final activeMapZones = zones.where((zone) => zone.isActive).toList();
+         final activePolygonZoneCount = polygonZones.where((zone) {
+           return zone.isActive && zone.isValid;
+         }).length;
+
+         final hasAnythingToShowOnMap =
+             gpsList.isNotEmpty ||
+             activeMapZones.isNotEmpty ||
+             activePolygonZoneCount > 0 ||
+             currentArea != null;
 
          final allGpsCount = gpsRecords.length;
          final uniqueCamelCount = gpsList.length;
@@ -1305,8 +1314,7 @@ import 'dart:async';
 
                                          const SizedBox(height: 10),
 
-                                         if (gpsList.isEmpty &&
-                                             activeMapZones.isEmpty)
+                                      if (!hasAnythingToShowOnMap)
                                            Container(
                                              width: double.infinity,
                                              padding: const EdgeInsets.all(18),
@@ -1397,10 +1405,11 @@ import 'dart:async';
                                    else
                                      ...gpsList.map(
                                        (record) => GpsRecordCard(
-                                         record: record,
-                                         dateText: recordDateText(record),
-                                         zones: activeMapZones,
-                                       ),
+                                                     record: record,
+                                                     dateText: recordDateText(record),
+                                                     zones: activeMapZones,
+                                                     polygonZones: polygonZones,
+                                                   ),
                                      ),
 
                                    const SizedBox(height: 40),
@@ -1486,29 +1495,40 @@ import 'dart:async';
 
 
    class CamelCluster {
+     double latitude;
+     double longitude;
 
-     final double latitude;
-
-     final double longitude;
+     final String zoneKey;
+     final String zoneTitle;
 
      final List<TagRecord> records;
 
-
      CamelCluster({
-
        required this.latitude,
-
        required this.longitude,
-
+       required this.zoneKey,
+       required this.zoneTitle,
        required this.records,
-
      });
-
 
      int get count {
        return records.length;
      }
 
+     void addRecord(TagRecord record) {
+       records.add(record);
+
+       double latSum = 0;
+       double lngSum = 0;
+
+       for (final item in records) {
+         latSum += item.latitude ?? 0;
+         lngSum += item.longitude ?? 0;
+       }
+
+       latitude = latSum / records.length;
+       longitude = lngSum / records.length;
+     }
    }
 
 
@@ -1801,87 +1821,62 @@ double zoneScaleForRecord(TagRecord record) {
        }
 
 
-       List<CamelCluster> get camelClusters {
+      List<CamelCluster> get camelClusters {
+        const maxDistanceMeters = 20.0;
 
-         final distance = clusterDistance;
+        final clusters = <CamelCluster>[];
 
-         final clusters =
-             <CamelCluster>[];
+        final sourceRecords = isRouteMode
+            ? visibleMapRecords
+            : mapRecords;
 
+        for (final record in sourceRecords) {
+          if (record.latitude == null || record.longitude == null) {
+            continue;
+          }
 
-         for (final record in visibleMapRecords) {
+          final zoneKey = clusterZoneKeyForRecord(record);
+          final zoneTitle = clusterZoneTitleForRecord(record);
 
+          CamelCluster? target;
 
-           if (record.latitude == null ||
-               record.longitude == null) {
-             continue;
-           }
+          for (final cluster in clusters) {
+            if (cluster.zoneKey != zoneKey) {
+              continue;
+            }
 
+            final distance = distanceMetersBetween(
+              lat1: cluster.latitude,
+              lng1: cluster.longitude,
+              lat2: record.latitude!,
+              lng2: record.longitude!,
+            );
 
-           CamelCluster? target;
+            if (distance <= maxDistanceMeters) {
+              target = cluster;
+              break;
+            }
+          }
 
+          if (target == null) {
+            clusters.add(
+              CamelCluster(
+                latitude: record.latitude!,
+                longitude: record.longitude!,
+                zoneKey: zoneKey,
+                zoneTitle: zoneTitle,
+                records: [
+                  record,
+                ],
+              ),
+            );
+          } else {
+            target.addRecord(record);
+          }
+        }
 
-           for (final cluster in clusters) {
-
-             final latDiff =
-                 (cluster.latitude -
-                         record.latitude!)
-                     .abs();
-
-
-             final lngDiff =
-                 (cluster.longitude -
-                         record.longitude!)
-                     .abs();
-
-
-
-             if (latDiff < distance &&
-                 lngDiff < distance) {
-
-               target = cluster;
-               break;
-             }
-
-           }
-
-
-
-           if (target == null) {
-
-             clusters.add(
-
-               CamelCluster(
-
-                 latitude:
-                     record.latitude!,
-
-                 longitude:
-                     record.longitude!,
-
-                 records:[
-                   record,
-                 ],
-
-               ),
-
-             );
-
-           }
-
-           else {
-
-             target.records.add(record);
-
-           }
-
-
-         }
-
-
-         return clusters;
-
-       }
+        return clusters;
+      }
 
 
        int get totalClusterCount {
@@ -1892,6 +1887,260 @@ double zoneScaleForRecord(TagRecord record) {
 
        List<AreaZone> get activeZones {
          return widget.zones.where((zone) => zone.isActive).toList();
+       }
+
+
+
+
+       Widget buildRouteStatusBar() {
+         if (!isRouteMode) {
+           return const SizedBox.shrink();
+         }
+
+         return Positioned(
+           top: 48,
+           right: 10,
+           left: 10,
+           child: Container(
+             padding: const EdgeInsets.symmetric(
+               horizontal: 10,
+               vertical: 8,
+             ),
+             decoration: BoxDecoration(
+               color: Colors.white.withOpacity(0.94),
+               borderRadius: BorderRadius.circular(14),
+               border: Border.all(
+                 color: const Color(0xFFC8EBDD),
+               ),
+               boxShadow: [
+                 BoxShadow(
+                   color: Colors.black.withOpacity(0.10),
+                   blurRadius: 12,
+                   offset: const Offset(0, 4),
+                 ),
+               ],
+             ),
+             child: Row(
+               children: [
+                 const Icon(
+                   Icons.route_rounded,
+                   color: Color(0xFF008B62),
+                   size: 18,
+                 ),
+
+                 const SizedBox(width: 6),
+
+                 Expanded(
+                   child: Text(
+                     routeInfoText,
+                     maxLines: 1,
+                     overflow: TextOverflow.ellipsis,
+                     style: const TextStyle(
+                       color: Color(0xFF062C5E),
+                       fontWeight: FontWeight.bold,
+                       fontSize: 11,
+                     ),
+                   ),
+                 ),
+
+                 const SizedBox(width: 6),
+
+                 InkWell(
+                   onTap: clearRouteMode,
+                   borderRadius: BorderRadius.circular(20),
+                   child: const Padding(
+                     padding: EdgeInsets.all(3),
+                     child: Icon(
+                       Icons.close_rounded,
+                       size: 18,
+                       color: Color(0xFFD32F2F),
+                     ),
+                   ),
+                 ),
+               ],
+             ),
+           ),
+         );
+       }
+
+
+
+       double degreesToRadians(double value) {
+         return value * math.pi / 180.0;
+       }
+
+       double distanceMetersBetween({
+         required double lat1,
+         required double lng1,
+         required double lat2,
+         required double lng2,
+       }) {
+         const earthRadiusMeters = 6371000.0;
+
+         final dLat = degreesToRadians(lat2 - lat1);
+         final dLng = degreesToRadians(lng2 - lng1);
+
+         final a =
+             math.sin(dLat / 2) * math.sin(dLat / 2) +
+             math.cos(degreesToRadians(lat1)) *
+                 math.cos(degreesToRadians(lat2)) *
+                 math.sin(dLng / 2) *
+                 math.sin(dLng / 2);
+
+         final c = 2 * math.atan2(
+           math.sqrt(a),
+           math.sqrt(1 - a),
+         );
+
+         return earthRadiusMeters * c;
+       }
+
+       bool isRecordInsideAreaZone(
+         TagRecord record,
+         AreaZone zone,
+       ) {
+         if (record.latitude == null || record.longitude == null) {
+           return false;
+         }
+
+         final distance = distanceMetersBetween(
+           lat1: record.latitude!,
+           lng1: record.longitude!,
+           lat2: zone.centerLatitude,
+           lng2: zone.centerLongitude,
+         );
+
+         return distance <= zone.radiusMeters;
+       }
+
+       bool isPointInsidePolygonZone({
+         required double latitude,
+         required double longitude,
+         required PolygonZone zone,
+       }) {
+         final points = zone.points;
+
+         if (points.length < 3) {
+           return false;
+         }
+
+         bool inside = false;
+         int j = points.length - 1;
+
+         for (int i = 0; i < points.length; i++) {
+           final xi = points[i].longitude;
+           final yi = points[i].latitude;
+
+           final xj = points[j].longitude;
+           final yj = points[j].latitude;
+
+           final intersects =
+               ((yi > latitude) != (yj > latitude)) &&
+               (longitude <
+                   (xj - xi) *
+                           (latitude - yi) /
+                           ((yj - yi) == 0 ? 0.0000001 : (yj - yi)) +
+                       xi);
+
+           if (intersects) {
+             inside = !inside;
+           }
+
+           j = i;
+         }
+
+         return inside;
+       }
+
+       double polygonApproxSize(
+         PolygonZone zone,
+       ) {
+         if (zone.points.isEmpty) {
+           return double.infinity;
+         }
+
+         final lats = zone.points.map((p) => p.latitude).toList();
+         final lngs = zone.points.map((p) => p.longitude).toList();
+
+         final latRange =
+             lats.reduce(math.max) - lats.reduce(math.min);
+
+         final lngRange =
+             lngs.reduce(math.max) - lngs.reduce(math.min);
+
+         return latRange.abs() * lngRange.abs();
+       }
+
+       String clusterZoneKeyForRecord(TagRecord record) {
+         if (record.latitude == null || record.longitude == null) {
+           return 'no_location';
+         }
+
+         final containingPolygons = activePolygonZones.where((zone) {
+           return isPointInsidePolygonZone(
+             latitude: record.latitude!,
+             longitude: record.longitude!,
+             zone: zone,
+           );
+         }).toList()
+           ..sort(
+             (a, b) => polygonApproxSize(a).compareTo(
+               polygonApproxSize(b),
+             ),
+           );
+
+         if (containingPolygons.isNotEmpty) {
+           return 'polygon_${containingPolygons.first.id}';
+         }
+
+         final containingAreaZones = activeZones.where((zone) {
+           return isRecordInsideAreaZone(record, zone);
+         }).toList()
+           ..sort(
+             (a, b) => a.radiusMeters.compareTo(b.radiusMeters),
+           );
+
+         if (containingAreaZones.isNotEmpty) {
+           return 'area_${containingAreaZones.first.id}';
+         }
+
+         return 'outside';
+       }
+
+       String clusterZoneTitleForRecord(TagRecord record) {
+         if (record.latitude == null || record.longitude == null) {
+           return 'بدون موقعیت';
+         }
+
+         final containingPolygons = activePolygonZones.where((zone) {
+           return isPointInsidePolygonZone(
+             latitude: record.latitude!,
+             longitude: record.longitude!,
+             zone: zone,
+           );
+         }).toList()
+           ..sort(
+             (a, b) => polygonApproxSize(a).compareTo(
+               polygonApproxSize(b),
+             ),
+           );
+
+         if (containingPolygons.isNotEmpty) {
+           return containingPolygons.first.name;
+         }
+
+         final containingAreaZones = activeZones.where((zone) {
+           return isRecordInsideAreaZone(record, zone);
+         }).toList()
+           ..sort(
+             (a, b) => a.radiusMeters.compareTo(b.radiusMeters),
+           );
+
+         if (containingAreaZones.isNotEmpty) {
+           return containingAreaZones.first.name;
+         }
+
+         return 'خارج از محدوده';
        }
 
 
@@ -2935,6 +3184,58 @@ double zoneScaleForRecord(TagRecord record) {
           }
         });
       }
+
+
+
+      String routePointTimeText(TagRecord record) {
+        final parsed = DateTime.tryParse(record.receivedDateTime);
+
+        if (parsed == null) {
+          return record.receivedTime;
+        }
+
+        final hour = parsed.hour.toString().padLeft(2, '0');
+        final minute = parsed.minute.toString().padLeft(2, '0');
+
+        return '$hour:$minute';
+      }
+
+      String get routeStartText {
+        if (routeRecords.isEmpty) {
+          return '-';
+        }
+
+        return routePointTimeText(routeRecords.first);
+      }
+
+      String get routeEndText {
+        if (routeRecords.isEmpty) {
+          return '-';
+        }
+
+        return routePointTimeText(routeRecords.last);
+      }
+
+      String get routeInfoText {
+        final record = routeRecord;
+
+        if (record == null) {
+          return '';
+        }
+
+        if (routeRecords.isEmpty) {
+          return 'برای شتر ${record.camelNo} امروز مسیر ثبت نشده است.';
+        }
+
+        if (routeRecords.length == 1) {
+          return 'مسیر شتر ${record.camelNo} • فقط ۱ نقطه ثبت شده';
+        }
+
+        return 'مسیر شتر ${record.camelNo} • ${routeRecords.length} نقطه • $routeStartText تا $routeEndText';
+      }
+
+
+
 
       void clearRouteMode() {
         setState(() {
@@ -3999,15 +4300,16 @@ double zoneScaleForRecord(TagRecord record) {
                                   Positioned.fill(
                                     child: IgnorePointer(
                                       child: CustomPaint(
-                                        painter: _CamelRoutePainter(
-                                          points: routeRecords
-                                              .where((record) {
-                                                return record.latitude != null &&
-                                                    record.longitude != null;
-                                              })
-                                              .map(positionFor)
-                                              .toList(),
-                                        ),
+                                       painter: _CamelRoutePainter(
+                                         points: routeRecords
+                                             .where((record) {
+                                               return record.latitude != null &&
+                                                   record.longitude != null;
+                                             })
+                                             .map(positionFor)
+                                             .toList(),
+                                         mapScale: safeMapScale,
+                                       ),
                                       ),
                                     ),
                                   ),
@@ -4053,6 +4355,11 @@ double zoneScaleForRecord(TagRecord record) {
                            ),
                          ),
                        ),
+
+
+                       buildRouteStatusBar(),
+
+
                        Positioned(
                          top: 10,
                          left: 10,
@@ -4535,16 +4842,20 @@ class _MapGridOnlyPainter extends CustomPainter {
 
 
 class GpsRecordCard extends StatelessWidget {
-  final TagRecord record;
-  final String dateText;
-  final List<AreaZone> zones;
+ final TagRecord record;
+ final String dateText;
+ final List<AreaZone> zones;
+ final List<PolygonZone> polygonZones;
 
-  const GpsRecordCard({
-    super.key,
-    required this.record,
-    required this.dateText,
-    this.zones = const [],
-  });
+
+
+ const GpsRecordCard({
+   super.key,
+   required this.record,
+   required this.dateText,
+   this.zones = const [],
+   this.polygonZones = const [],
+ });
 
   bool get hasGps {
     return record.latitude != null && record.longitude != null;
@@ -4560,6 +4871,88 @@ class GpsRecordCard extends StatelessWidget {
       zones: zones,
     );
   }
+
+
+
+    List<PolygonZone> get activePolygonZones {
+      return polygonZones.where((zone) {
+        return zone.isActive && zone.isValid;
+      }).toList();
+    }
+
+    bool isPointInsidePolygonZone({
+      required double latitude,
+      required double longitude,
+      required PolygonZone zone,
+    }) {
+      final points = zone.points;
+
+      if (points.length < 3) {
+        return false;
+      }
+
+      bool inside = false;
+      int j = points.length - 1;
+
+      for (int i = 0; i < points.length; i++) {
+        final xi = points[i].longitude;
+        final yi = points[i].latitude;
+
+        final xj = points[j].longitude;
+        final yj = points[j].latitude;
+
+        final intersects =
+            ((yi > latitude) != (yj > latitude)) &&
+            (longitude <
+                (xj - xi) *
+                        (latitude - yi) /
+                        ((yj - yi) == 0 ? 0.0000001 : (yj - yi)) +
+                    xi);
+
+        if (intersects) {
+          inside = !inside;
+        }
+
+        j = i;
+      }
+
+      return inside;
+    }
+
+    List<PolygonZone> get containingPolygonZones {
+      if (!hasGps) {
+        return [];
+      }
+
+      return activePolygonZones.where((zone) {
+        return isPointInsidePolygonZone(
+          latitude: record.latitude!,
+          longitude: record.longitude!,
+          zone: zone,
+        );
+      }).toList();
+    }
+
+    bool get isInsideForbiddenPolygon {
+      return containingPolygonZones.any((zone) {
+        return zone.type == PolygonZoneType.forbidden;
+      });
+    }
+
+    bool get isInsideAllowedPolygon {
+      return containingPolygonZones.any((zone) {
+        return zone.type != PolygonZoneType.forbidden;
+      });
+    }
+
+    String get containingPolygonNames {
+      return containingPolygonZones.map((zone) => zone.name).join('، ');
+    }
+
+    bool get hasAnyZoneDefinition {
+      return zones.isNotEmpty || activePolygonZones.isNotEmpty;
+    }
+
 
   Future<void> copyGps(BuildContext context) async {
     if (!hasGps) {
@@ -4595,6 +4988,14 @@ class GpsRecordCard extends StatelessWidget {
 
   Color get mainStatusColor {
     final result = zoneResult;
+
+     if (isInsideForbiddenPolygon) {
+        return const Color(0xFFD32F2F);
+      }
+
+      if (isInsideAllowedPolygon) {
+        return const Color(0xFF008B62);
+      }
 
     if (record.lock == 0) {
       return const Color(0xFFD32F2F);
@@ -4633,43 +5034,59 @@ class GpsRecordCard extends StatelessWidget {
     return Icons.gps_fixed_rounded;
   }
 
-  String zoneStatusText(ZoneCheckResult? result) {
-    if (!hasGps) {
-      return 'GPS برای این تگ ثبت نشده است.';
-    }
+ String zoneStatusText(ZoneCheckResult? result) {
+   if (!hasGps) {
+     return 'GPS برای این تگ ثبت نشده است.';
+   }
 
-    if (zones.isEmpty) {
-      return 'هنوز محدوده‌ای تعریف نشده است.';
-    }
+   if (!hasAnyZoneDefinition) {
+     return 'هنوز محدوده‌ای تعریف نشده است.';
+   }
 
-    if (result == null) {
-      return 'وضعیت محدوده نامشخص است.';
-    }
+   if (isInsideForbiddenPolygon) {
+     return 'داخل محدوده ممنوع: $containingPolygonNames';
+   }
 
-    if (result.isInsideForbiddenZone) {
-      final names = result.forbiddenZones.map((zone) => zone.name).join('، ');
-      return 'داخل منطقه ممنوع: $names';
-    }
+   if (isInsideAllowedPolygon) {
+     return 'داخل محدوده: $containingPolygonNames';
+   }
 
-    if (result.isOutsideAllowedZones) {
-      return 'خارج از محدوده مجاز';
-    }
+   if (result == null) {
+     return 'خارج از محدوده‌های تعریف‌شده';
+   }
 
-    if (result.insideZones.isNotEmpty) {
-      return 'داخل محدوده: ${result.insideZonesText}';
-    }
+   if (result.isInsideForbiddenZone) {
+     final names = result.forbiddenZones.map((zone) => zone.name).join('، ');
+     return 'داخل منطقه ممنوع: $names';
+   }
 
-    return 'خارج از محدوده‌های تعریف‌شده';
-  }
+   if (result.isOutsideAllowedZones) {
+     return 'خارج از محدوده مجاز';
+   }
+
+   if (result.insideZones.isNotEmpty) {
+     return 'داخل محدوده: ${result.insideZonesText}';
+   }
+
+   return 'خارج از محدوده‌های تعریف‌شده';
+ }
 
   Color zoneStatusColor(ZoneCheckResult? result) {
     if (!hasGps) {
       return Colors.grey;
     }
 
-    if (zones.isEmpty) {
-      return const Color(0xFF086EBB);
+    if (isInsideForbiddenPolygon) {
+      return const Color(0xFFD32F2F);
     }
+
+    if (isInsideAllowedPolygon) {
+      return const Color(0xFF008B62);
+    }
+
+   if (!hasAnyZoneDefinition) {
+     return const Color(0xFF086EBB);
+   }
 
     if (result?.isInsideForbiddenZone == true) {
       return const Color(0xFFD32F2F);
@@ -4691,9 +5108,17 @@ class GpsRecordCard extends StatelessWidget {
       return Icons.gps_off_rounded;
     }
 
-    if (zones.isEmpty) {
-      return Icons.layers_clear_rounded;
+    if (isInsideForbiddenPolygon) {
+      return Icons.block_rounded;
     }
+
+    if (isInsideAllowedPolygon) {
+      return Icons.check_circle_rounded;
+    }
+
+  if (!hasAnyZoneDefinition) {
+    return Icons.layers_clear_rounded;
+  }
 
     if (result?.isInsideForbiddenZone == true) {
       return Icons.block_rounded;
@@ -4971,10 +5396,17 @@ class GpsRecordCard extends StatelessWidget {
 
 class _CamelRoutePainter extends CustomPainter {
   final List<Offset> points;
+  final double mapScale;
 
   const _CamelRoutePainter({
     required this.points,
+    required this.mapScale,
   });
+
+  double sceneSize(double screenSize) {
+    final safeScale = mapScale <= 0 ? 1.0 : mapScale;
+    return screenSize / safeScale;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -4997,66 +5429,239 @@ class _CamelRoutePainter extends CustomPainter {
       }
 
       final shadowPaint = Paint()
-        ..color = Colors.white.withOpacity(0.85)
-        ..strokeWidth = 8
+        ..color = Colors.white.withOpacity(0.82)
+        ..strokeWidth = sceneSize(5)
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
 
       final routePaint = Paint()
         ..color = const Color(0xFF008B62)
-        ..strokeWidth = 4
+        ..strokeWidth = sceneSize(2.4)
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
 
       canvas.drawPath(path, shadowPaint);
       canvas.drawPath(path, routePaint);
+
+      drawDirectionArrows(canvas);
+    }
+
+    drawMiddlePoints(canvas);
+    drawStartAndEnd(canvas);
+  }
+
+  void drawMiddlePoints(Canvas canvas) {
+    if (points.length <= 2) {
+      return;
     }
 
     final pointPaint = Paint()
-      ..color = const Color(0xFF008B62)
+      ..color = const Color(0xFF008B62).withOpacity(0.70)
       ..style = PaintingStyle.fill;
 
-    for (final point in points) {
+    for (final point in points.skip(1).take(points.length - 2)) {
       canvas.drawCircle(
         point,
-        3,
+        sceneSize(1.6),
         pointPaint,
       );
     }
+  }
 
+  void drawStartAndEnd(Canvas canvas) {
     final start = points.first;
     final end = points.last;
 
     canvas.drawCircle(
       start,
-      8,
+      sceneSize(5),
       Paint()..color = Colors.white,
     );
 
     canvas.drawCircle(
       start,
-      5,
+      sceneSize(3.3),
       Paint()..color = const Color(0xFF008B62),
     );
 
     canvas.drawCircle(
       end,
-      9,
+      sceneSize(5.5),
       Paint()..color = Colors.white,
     );
 
     canvas.drawCircle(
       end,
-      6,
+      sceneSize(3.7),
       Paint()..color = const Color(0xFFD32F2F),
     );
+
+    drawPointLabel(
+      canvas: canvas,
+      point: start,
+      text: 'شروع',
+      color: const Color(0xFF008B62),
+      dy: sceneSize(-18),
+    );
+
+    drawPointLabel(
+      canvas: canvas,
+      point: end,
+      text: 'پایان',
+      color: const Color(0xFFD32F2F),
+      dy: sceneSize(8),
+    );
+  }
+
+  void drawPointLabel({
+    required Canvas canvas,
+    required Offset point,
+    required String text,
+    required Color color,
+    required double dy,
+  }) {
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: sceneSize(7),
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.rtl,
+    );
+
+    textPainter.layout();
+
+    final horizontalPadding = sceneSize(4);
+    final verticalPadding = sceneSize(2);
+
+    final rect = Rect.fromLTWH(
+      point.dx - textPainter.width / 2 - horizontalPadding,
+      point.dy + dy,
+      textPainter.width + horizontalPadding * 2,
+      textPainter.height + verticalPadding * 2,
+    );
+
+    final rrect = RRect.fromRectAndRadius(
+      rect,
+      Radius.circular(sceneSize(5)),
+    );
+
+    canvas.drawRRect(
+      rrect,
+      Paint()..color = Colors.white.withOpacity(0.88),
+    );
+
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = color.withOpacity(0.30)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = sceneSize(0.8),
+    );
+
+    textPainter.paint(
+      canvas,
+      Offset(
+        rect.left + horizontalPadding,
+        rect.top + verticalPadding,
+      ),
+    );
+  }
+
+  void drawDirectionArrows(Canvas canvas) {
+    if (points.length < 2) {
+      return;
+    }
+
+    final minDistance = sceneSize(180);
+
+    double accumulatedDistance = 0;
+
+    for (int i = 1; i < points.length; i++) {
+      final from = points[i - 1];
+      final to = points[i];
+
+      final distance = (to - from).distance;
+      accumulatedDistance += distance;
+
+      if (accumulatedDistance < minDistance) {
+        continue;
+      }
+
+      if (distance < sceneSize(18)) {
+        continue;
+      }
+
+      drawArrow(
+        canvas: canvas,
+        from: from,
+        to: to,
+      );
+
+      accumulatedDistance = 0;
+    }
+  }
+
+  void drawArrow({
+    required Canvas canvas,
+    required Offset from,
+    required Offset to,
+  }) {
+    final angle = math.atan2(
+      to.dy - from.dy,
+      to.dx - from.dx,
+    );
+
+    final center = Offset(
+      (from.dx + to.dx) / 2,
+      (from.dy + to.dy) / 2,
+    );
+
+    final arrowSize = sceneSize(5.5);
+
+    final arrowPath = Path()
+      ..moveTo(arrowSize, 0)
+      ..lineTo(-arrowSize * 0.55, -arrowSize * 0.50)
+      ..lineTo(-arrowSize * 0.25, 0)
+      ..lineTo(-arrowSize * 0.55, arrowSize * 0.50)
+      ..close();
+
+    canvas.save();
+
+    canvas.translate(
+      center.dx,
+      center.dy,
+    );
+
+    canvas.rotate(angle);
+
+    canvas.drawPath(
+      arrowPath,
+      Paint()
+        ..color = Colors.white.withOpacity(0.90)
+        ..style = PaintingStyle.fill,
+    );
+
+    canvas.drawPath(
+      arrowPath,
+      Paint()
+        ..color = const Color(0xFF008B62)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = sceneSize(0.9),
+    );
+
+    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant _CamelRoutePainter oldDelegate) {
-    return oldDelegate.points != points;
+    return oldDelegate.points != points ||
+        oldDelegate.mapScale != mapScale;
   }
 }
 
