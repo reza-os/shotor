@@ -40,7 +40,7 @@ class AppSettings {
 
 
     // سیستم
-    this.defaultLocationName = 'دریافت از USB',
+    this.defaultLocationName = 'دریافت از wifi',
     this.usbBaudRate = 115200,
     this.smsEnabled = true,
 
@@ -201,7 +201,7 @@ class AppSettings {
 
       // سیستم
       defaultLocationName:
-          json['defaultLocationName'] ?? 'دریافت از USB',
+          json['defaultLocationName'] ?? 'دریافت از wifi',
 
       usbBaudRate:
           json['usbBaudRate'] ?? 115200,

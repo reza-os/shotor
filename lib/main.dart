@@ -26,7 +26,7 @@ import 'models/zone_area.dart';
 import 'models/app_alert.dart';
 import 'models/antenna_payload.dart';
 import 'services/local_storage_service.dart';
-import 'services/usb_antenna_service.dart';
+import 'services/wifi_antenna_service.dart';
 import 'services/alert_service.dart';
 import 'models/app_settings.dart';
 import 'services/app_setting_service.dart';
@@ -50,6 +50,8 @@ import 'screens/camel_info_dashboard_page.dart';
 import 'services/saraban_export_service.dart';
 import 'services/herd_settings_service.dart';
 import 'screens/geo_area_selection_page.dart';
+
+import 'services/antenna_wifi_connector.dart';
 
 
 
@@ -393,9 +395,9 @@ class _HomePageState extends State<HomePage> {
                     children: const [
                       Expanded(
                         child: StatusCard(
-                          title: 'دستگاه USB',
+                          title: 'دستگاه wifi',
                           subtitle: 'آماده دریافت',
-                          icon: Icons.usb_rounded,
+                          icon: Icons.wifi_rounded,
                         ),
                       ),
                       SizedBox(width: 10),
@@ -725,7 +727,7 @@ class _ReceivePageState extends State<ReceivePage>
   @override
   bool get wantKeepAlive => true;
 
-  final UsbAntennaService usbService = UsbAntennaService();
+  final WifiAntennaService antennaService = WifiAntennaService();
 
   static const int duplicateIgnoreSeconds = 10;
 
@@ -742,14 +744,14 @@ class _ReceivePageState extends State<ReceivePage>
         '{"Password":926877721,"State":3,"Lock":1,"Conter_Lock":10,"Battery_Percent":30,"Count":76}',
   );
 
-  StreamSubscription<String>? usbSubscription;
+  StreamSubscription<String>? antennaSubscription;
 
   late List<TagRecord> receivedRecords;
 
-  bool isUsbConnected = false;
-  bool isUsbConnecting = false;
-  String usbStatus = 'قطع';
-  String lastUsbJson = '-';
+  bool isAntennaConnected = false;
+  bool isAntennaConnecting = false;
+  String antennaStatus = 'قطع';
+  String lastAntennaJson = '-';
   bool isGettingLocation = false;
   String gpsStatus = 'آماده دریافت موقعیت';
   AppLocationResult? lastLocationResult;
@@ -775,8 +777,8 @@ class _ReceivePageState extends State<ReceivePage>
   void dispose() {
     receiveRefreshTimer?.cancel();
 
-    usbSubscription?.cancel();
-    unawaited(usbService.dispose());
+    antennaSubscription?.cancel();
+    unawaited(antennaService.dispose());
     jsonController.dispose();
 
     super.dispose();
@@ -826,24 +828,20 @@ class _ReceivePageState extends State<ReceivePage>
     }).toList();
   }
 
-  Future<void> connectUsbDevice() async {
-   await LiveHerdSessionService.startSession(
-      reset: true,
-    );
+  Future<void> connectAntenna() async {
+    if (isAntennaConnecting || isAntennaConnected || antennaService.isConnected) {
+      return;
+    }
+
+    setState(() {
+      isAntennaConnecting = true;
+      antennaStatus = 'در حال اتصال به آنتن WiFi...';
+    });
 
     try {
-      setState(() {
-        isUsbConnecting = true;
-        usbStatus = 'در حال جستجوی دستگاه USB...';
-      });
+      await antennaSubscription?.cancel();
 
-      await usbService.connectFirstDevice(
-        baudRate: appSettings.usbBaudRate,
-      );
-
-      await usbSubscription?.cancel();
-
-      usbSubscription = usbService.jsonStream.listen(
+      antennaSubscription = antennaService.jsonStream.listen(
         (jsonText) async {
           await processJsonText(
             jsonText,
@@ -855,112 +853,158 @@ class _ReceivePageState extends State<ReceivePage>
           if (!mounted) return;
 
           setState(() {
-            usbStatus = 'خطای دریافت USB';
+            antennaStatus = 'خطا در دریافت داده WiFi';
+            isAntennaConnected = false;
           });
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('خطای USB: $error'),
+              content: Text('خطای دریافت WiFi: $error'),
               backgroundColor: Colors.red,
             ),
           );
         },
+        onDone: () {
+          if (!mounted) return;
+
+          setState(() {
+            isAntennaConnected = false;
+            antennaStatus = 'اتصال WiFi قطع شد';
+          });
+        },
       );
 
-      if (!mounted) return;
 
       setState(() {
-        isUsbConnected = true;
-        isUsbConnecting = false;
-        usbStatus = 'متصل: ${usbService.connectedDeviceName}';
+        antennaStatus = 'در حال اتصال به WiFi آنتن...';
       });
+
+      await AntennaWifiConnector.connectToAntennaWifi();
+
+      await Future.delayed(
+        const Duration(milliseconds: 800),
+      );
+
+
+
+      await antennaService.connect(
+        url: WifiAntennaService.defaultUrl,
+      );
+
+      await LiveHerdSessionService.startSession(
+        reset: true,
+      );
 
       await UsbLogService.addLog(
         type: UsbLogType.connected,
-        title: 'اتصال USB برقرار شد',
-        message: usbService.connectedDeviceName,
+        title: 'اتصال WiFi برقرار شد',
+        message: antennaService.connectedDeviceName,
       );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('دستگاه USB متصل شد: ${usbService.connectedDeviceName}'),
-        ),
-      );
-    } catch (e) {
       if (!mounted) return;
 
       setState(() {
-        isUsbConnected = false;
-        isUsbConnecting = false;
-        usbStatus = 'اتصال ناموفق';
+        isAntennaConnected = true;
+        antennaStatus = 'متصل: ${antennaService.connectedDeviceName}';
       });
-
-      await UsbLogService.addLog(
-        type: UsbLogType.error,
-        title: 'خطا در اتصال USB',
-        message: e.toString(),
-      );
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطا در اتصال USB: $e'),
+          content: Text(
+            'آنتن WiFi متصل شد: ${antennaService.connectedDeviceName}',
+          ),
+        ),
+      );
+    } catch (e) {
+      await antennaSubscription?.cancel();
+      antennaSubscription = null;
+
+      await antennaService.disconnect();
+
+      await UsbLogService.addLog(
+        type: UsbLogType.error,
+        title: 'خطا در اتصال WiFi',
+        message: e.toString(),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        isAntennaConnected = false;
+        antennaStatus = 'اتصال WiFi ناموفق';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('خطا در اتصال WiFi: $e'),
           backgroundColor: Colors.red,
         ),
       );
+    } finally {
+      if (!mounted) return;
+
+      setState(() {
+        isAntennaConnecting = false;
+      });
     }
   }
 
-  Future<void> disconnectUsbDevice() async {
-    await usbSubscription?.cancel();
-    usbSubscription = null;
+ Future<void> disconnectAntenna() async {
+   await antennaSubscription?.cancel();
+   antennaSubscription = null;
 
-    await usbService.disconnect();
+   await antennaService.disconnect();
+   await AntennaWifiConnector.releaseWifiNetwork();
 
-    await UsbLogService.addLog(
-      type: UsbLogType.disconnected,
-      title: 'اتصال USB قطع شد',
-      message: 'کاربر اتصال USB را قطع کرد.',
-    );
+   await UsbLogService.addLog(
+     type: UsbLogType.disconnected,
+     title: 'اتصال WiFi قطع شد',
+     message: 'کاربر اتصال WiFi آنتن را قطع کرد.',
+   );
 
-    if (!mounted) return;
+   if (!mounted) return;
 
-    setState(() {
-      isUsbConnected = false;
-      usbStatus = 'قطع';
-    });
+   setState(() {
+     isAntennaConnected = false;
+     isAntennaConnecting = false;
+     antennaStatus = 'قطع';
+   });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('اتصال USB قطع شد.'),
-      ),
-    );
-  }
+   ScaffoldMessenger.of(context).showSnackBar(
+     const SnackBar(
+       content: Text('اتصال WiFi آنتن قطع شد.'),
+     ),
+   );
+ }
 
-  String buildRecordSignature(AntennaPayload payload) {
-    return '${payload.password}-'
-        '${payload.lock}-'
-        '${payload.counterLock}-'
-        '${payload.batteryPercent}';
-  }
 
-  bool shouldSkipDuplicate(String signature) {
-    final now = DateTime.now();
+ String buildRecordSignature(AntennaPayload payload) {
+   return '${payload.password}-'
+       '${payload.lock}-'
+       '${payload.counterLock}-'
+       '${payload.batteryPercent}';
+ }
 
-    recentRecordSignatures.removeWhere((key, time) {
-      return now.difference(time).inSeconds > 60;
-    });
+ bool shouldSkipDuplicate(String signature) {
+   final now = DateTime.now();
 
-    final previousTime = recentRecordSignatures[signature];
+   recentRecordSignatures.removeWhere((key, time) {
+     return now.difference(time).inSeconds > 60;
+   });
 
-    if (previousTime != null &&
-        now.difference(previousTime).inSeconds < duplicateIgnoreSeconds) {
-      recentRecordSignatures[signature] = now;
-      return true;
-    }
+   final previousTime = recentRecordSignatures[signature];
 
-    recentRecordSignatures[signature] = now;
-    return false;
-  }
+   if (previousTime != null &&
+       now.difference(previousTime).inSeconds < duplicateIgnoreSeconds) {
+     recentRecordSignatures[signature] = now;
+     return true;
+   }
+
+   recentRecordSignatures[signature] = now;
+   return false;
+ }
+
+
 
   Future<AppLocationResult> getLocationForRecord() async {
     if (mounted) {
@@ -997,9 +1041,9 @@ class _ReceivePageState extends State<ReceivePage>
       if (shouldSkipDuplicate(signature)) {
         setState(() {
           duplicateSkipCount++;
-          lastUsbJson = jsonText.trim();
+          lastAntennaJson = jsonText.trim();
           jsonController.text = jsonText.trim();
-          usbStatus = 'داده تکراری نادیده گرفته شد: $tagId';
+          antennaStatus = 'داده تکراری نادیده گرفته شد: $tagId';
         });
 
         if (showSnackBar) {
@@ -1047,10 +1091,10 @@ class _ReceivePageState extends State<ReceivePage>
       );
 
       setState(() {
-        lastUsbJson = jsonText.trim();
+        lastAntennaJson = jsonText.trim();
         jsonController.text = jsonText.trim();
         receivedRecords.insert(0, record);
-        usbStatus = isUsbConnected ? 'دریافت شد: ${record.tagId}' : usbStatus;
+        antennaStatus = isAntennaConnected ? 'دریافت شد: ${record.tagId}' : antennaStatus;
       });
 
       await LocalStorageService.addTagRecord(record);
@@ -1080,10 +1124,10 @@ class _ReceivePageState extends State<ReceivePage>
       await AlertService.addAlert(
         AppAlert(
           id: 'json-error-${now.millisecondsSinceEpoch}',
-          title: 'خطای خواندن داده USB',
+          title: 'خطای خواندن داده wifi',
           subtitle: 'JSON دریافتی از دستگاه معتبر نبود.',
           time: '$hour:$minute',
-          locationName: 'دریافت USB',
+          locationName: 'دریافت wifi',
           type: AlertType.antennaError,
           level: AlertLevel.warning,
           messageSent: false,
@@ -1100,7 +1144,7 @@ class _ReceivePageState extends State<ReceivePage>
       if (!mounted) return;
 
       setState(() {
-        usbStatus = 'JSON نامعتبر';
+        antennaStatus = 'JSON نامعتبر';
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1253,8 +1297,8 @@ class _ReceivePageState extends State<ReceivePage>
                         children: [
                           Expanded(
                             child: MiniInfo(
-                              title: 'USB',
-                              value: isUsbConnected ? 'متصل' : 'قطع',
+                              title: 'wifi',
+                              value: isAntennaConnected ? 'متصل' : 'قطع',
                             ),
                           ),
                           Expanded(
@@ -1278,20 +1322,20 @@ class _ReceivePageState extends State<ReceivePage>
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: isUsbConnected
+                          color: isAntennaConnected
                               ? const Color(0xFFEAF8F2)
                               : const Color(0xFFFFF3E0),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: isUsbConnected
+                            color: isAntennaConnected
                                 ? const Color(0xFFB7E5D2)
                                 : const Color(0xFFFFCC80),
                           ),
                         ),
                         child: Text(
-                          'وضعیت USB: $usbStatus',
+                          'وضعیت wifi: $antennaStatus',
                           style: TextStyle(
-                            color: isUsbConnected
+                            color: isAntennaConnected
                                 ? const Color(0xFF0A4F35)
                                 : const Color(0xFF8A4B00),
                             fontWeight: FontWeight.bold,
@@ -1343,7 +1387,7 @@ class _ReceivePageState extends State<ReceivePage>
                         ),
                       ),
 
-                      if (lastUsbJson != '-') ...[
+                      if (lastAntennaJson != '-') ...[
                         const SizedBox(height: 10),
                         Container(
                           width: double.infinity,
@@ -1355,7 +1399,7 @@ class _ReceivePageState extends State<ReceivePage>
                           child: Directionality(
                             textDirection: TextDirection.ltr,
                             child: Text(
-                              lastUsbJson,
+                              lastAntennaJson,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -1374,10 +1418,10 @@ class _ReceivePageState extends State<ReceivePage>
                         children: [
                           Expanded(
                             child: ElevatedButton.icon(
-                              onPressed: isUsbConnecting || isUsbConnected
+                              onPressed: isAntennaConnecting || isAntennaConnected
                                   ? null
-                                  : connectUsbDevice,
-                              icon: isUsbConnecting
+                                  : connectAntenna,
+                              icon: isAntennaConnecting
                                   ? const SizedBox(
                                       width: 18,
                                       height: 18,
@@ -1386,11 +1430,11 @@ class _ReceivePageState extends State<ReceivePage>
                                         color: Colors.white,
                                       ),
                                     )
-                                  : const Icon(Icons.usb_rounded),
+                                  : const Icon(Icons.wifi_rounded),
                               label: Text(
-                                isUsbConnecting
+                                isAntennaConnecting
                                     ? 'در حال اتصال...'
-                                    : 'اتصال USB',
+                                    : 'اتصال wifi',
                               ),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF003B7A),
@@ -1408,9 +1452,9 @@ class _ReceivePageState extends State<ReceivePage>
                           Expanded(
                             child: ElevatedButton.icon(
                               onPressed:
-                                  isUsbConnected ? disconnectUsbDevice : null,
-                              icon: const Icon(Icons.usb_off_rounded),
-                              label: const Text('قطع USB'),
+                                  isAntennaConnected ? disconnectAntenna : null,
+                              icon: const Icon(Icons.wifi_off_rounded),
+                              label: const Text('قطع wifi'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFFD32F2F),
                                 foregroundColor: Colors.white,
@@ -1444,7 +1488,7 @@ class _ReceivePageState extends State<ReceivePage>
                           maxLines: 4,
                           textAlign: TextAlign.left,
                           decoration: InputDecoration(
-                            hintText: 'JSON دریافتی از دستگاه USB',
+                            hintText: 'JSON دریافتی از دستگاه wifi',
                             filled: true,
                             fillColor: const Color(0xFFF5F7FA),
                             border: OutlineInputBorder(
@@ -3373,7 +3417,7 @@ class PrintableManagementReportPreviewPage extends StatelessWidget {
     final summary = report.summary;
 
     if (summary.totalRecords == 0) {
-      return 'برای این تاریخ رکوردی ثبت نشده است. وضعیت دریافت دستگاه، GPS و اتصال USB بررسی شود.';
+      return 'برای این تاریخ رکوردی ثبت نشده است. وضعیت دریافت دستگاه، GPS و اتصال wifi بررسی شود.';
     }
 
     if (summary.importantProblemsCount == 0 && summary.missingCamelCount == 0) {
@@ -5240,7 +5284,7 @@ class MorePage extends StatelessWidget {
           child: AlertDialog(
             title: const Text('درباره پروژه ساربان'),
             content: const Text(
-              'سامانه پایش شترها با دریافت داده از آنتن USB، ثبت اطلاعات تگ‌ها، مدیریت شترها، ذخیره سوابق و آماده‌سازی گزارش‌های روزانه.',
+              'سامانه پایش شترها با دریافت داده از آنتن wifi، ثبت اطلاعات تگ‌ها، مدیریت شترها، ذخیره سوابق و آماده‌سازی گزارش‌های روزانه.',
               style: TextStyle(height: 1.7),
             ),
             actions: [
@@ -5365,7 +5409,7 @@ class MorePage extends StatelessWidget {
                                 ),
                               ),
                               title: const Text(
-                                'لاگ دریافت USB',
+                                'لاگ دریافت wifi',
                                 style: TextStyle(fontWeight: FontWeight.bold),
                               ),
                               subtitle: const Text(
@@ -7415,7 +7459,7 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
                               buildTextField(
                                 controller: baudRateController,
                                 label: 'سرعت USB / Baud Rate',
-                                icon: Icons.usb_rounded,
+                                icon: Icons.wifi_rounded,
                                 keyboardType: TextInputType.number,
                                 textDirection: TextDirection.ltr,
                               ),
@@ -7740,7 +7784,7 @@ class _UsbLogsPageState extends State<UsbLogsPage> {
                                 ),
                                 SizedBox(height: 8),
                                 Text(
-                                  'از صفحه دریافت، اتصال USB را تست کن یا JSON دستی پردازش کن.',
+                                  'از صفحه دریافت، اتصال wifi را تست کن یا JSON دستی پردازش کن.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: Colors.black54,
@@ -7797,9 +7841,9 @@ class UsbLogCard extends StatelessWidget {
   IconData get icon {
     switch (log.type) {
       case UsbLogType.connected:
-        return Icons.usb_rounded;
+        return Icons.wifi_rounded;
       case UsbLogType.disconnected:
-        return Icons.usb_off_rounded;
+        return Icons.wifi_off_rounded;
       case UsbLogType.received:
         return Icons.check_circle_rounded;
       case UsbLogType.duplicate:
