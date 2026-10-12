@@ -11,12 +11,22 @@ class WifiAntennaService {
   final StreamController<String> _jsonController =
       StreamController<String>.broadcast();
 
+  final StreamController<void> _disconnectController =
+      StreamController<void>.broadcast();
+
+
+
+
   String _buffer = '';
   String _url = defaultUrl;
 
   Stream<String> get jsonStream {
     return _jsonController.stream;
   }
+
+   Stream<void> get disconnectStream {
+      return _disconnectController.stream;
+    }
 
   bool get isConnected {
     return _socket != null;
@@ -29,6 +39,59 @@ class WifiAntennaService {
 
     return 'Mobile_Antenna_ESP32 / $_url';
   }
+
+
+
+
+
+
+
+
+  Future<void> sendJson(Map<String, dynamic> data) async {
+    final socket = _socket;
+
+    if (socket == null || socket.readyState != WebSocket.open) {
+      throw StateError('WebSocket متصل نیست.');
+    }
+
+    socket.add(jsonEncode(data));
+  }
+
+
+    Future<void> syncClockWithPhone() async {
+      final unixMs = DateTime.now().toUtc().millisecondsSinceEpoch;
+
+      await sendJson({
+        'type': 'time_sync',
+        'unixMs': unixMs,
+      });
+    }
+
+
+  Future<void> subscribe() async {
+    await sendJson({
+      'type': 'subscribe',
+    });
+  }
+
+  Future<void> ack(String messageId) async {
+    await sendJson({
+      'type': 'ack',
+      'MessageId': messageId,
+    });
+  }
+
+  Future<void> unsubscribe() async {
+    if (!isConnected) {
+      return;
+    }
+
+    await sendJson({
+      'type': 'unsubscribe',
+    });
+  }
+
+
 
   Future<void> connect({
     String url = defaultUrl,
@@ -51,9 +114,18 @@ class WifiAntennaService {
       _onMessage,
       onError: (error) {
         _jsonController.addError(error);
+
+        if (!_disconnectController.isClosed) {
+          _disconnectController.add(null);
+        }
       },
       onDone: () {
         _socket = null;
+        _subscription = null;
+
+        if (!_disconnectController.isClosed) {
+          _disconnectController.add(null);
+        }
       },
       cancelOnError: false,
     );
@@ -121,8 +193,9 @@ class WifiAntennaService {
     _buffer = '';
   }
 
-  Future<void> dispose() async {
-    await disconnect();
-    await _jsonController.close();
-  }
+ Future<void> dispose() async {
+   await disconnect();
+   await _jsonController.close();
+   await _disconnectController.close();
+ }
 }

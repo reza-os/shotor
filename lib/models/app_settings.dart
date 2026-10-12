@@ -4,6 +4,11 @@ class AppSettings {
   final String shepherdId;
   final String centerPhone;
 
+  final String wifiSsid;
+  final String wifiPassword;
+  final String wifiWebSocketUrl;
+  final bool wifiAutoReconnect;
+
 
   // اطلاعات گله
   final String herdId;
@@ -27,6 +32,12 @@ class AppSettings {
     this.shepherdName = 'ساربان',
     this.shepherdId = '-',
     this.centerPhone = '',
+
+
+    this.wifiSsid = 'Mobile_Antenna_ESP32',
+    this.wifiPassword = 'antenna123',
+    this.wifiWebSocketUrl = 'ws://192.168.4.1:81/',
+    this.wifiAutoReconnect = true,
 
 
     // گله
@@ -141,6 +152,12 @@ class AppSettings {
           camelCount,
 
 
+          'wifiSsid': wifiSsid,
+          'wifiPassword': wifiPassword,
+          'wifiWebSocketUrl': wifiWebSocketUrl,
+          'wifiAutoReconnect': wifiAutoReconnect,
+
+
       // دستگاه
       'deviceId':
           deviceId,
@@ -178,6 +195,12 @@ class AppSettings {
 
       centerPhone:
           json['centerPhone'] ?? '',
+
+
+          wifiSsid: json['wifiSsid'] ?? 'Mobile_Antenna_ESP32',
+          wifiPassword: json['wifiPassword'] ?? 'antenna123',
+          wifiWebSocketUrl: json['wifiWebSocketUrl'] ?? 'ws://192.168.4.1:81/',
+          wifiAutoReconnect: json['wifiAutoReconnect'] ?? true,
 
 
 

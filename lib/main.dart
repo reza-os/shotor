@@ -53,6 +53,9 @@ import 'screens/geo_area_selection_page.dart';
 
 import 'services/antenna_wifi_connector.dart';
 
+import 'models/antenna_ws_frame.dart';
+import 'services/database_service.dart';
+
 
 
 void main() async {
@@ -746,6 +749,20 @@ class _ReceivePageState extends State<ReceivePage>
 
   StreamSubscription<String>? antennaSubscription;
 
+
+  StreamSubscription<void>? antennaDisconnectSubscription;
+
+  Timer? antennaReconnectTimer;
+
+  bool allowAntennaReconnect = false;
+
+  int antennaReconnectAttempt = 0;
+
+  int antennaConnectionGeneration = 0;
+
+
+
+
   late List<TagRecord> receivedRecords;
 
   bool isAntennaConnected = false;
@@ -773,16 +790,20 @@ class _ReceivePageState extends State<ReceivePage>
     );
   }
 
-  @override
-  void dispose() {
-    receiveRefreshTimer?.cancel();
+ @override
+ void dispose() {
+   receiveRefreshTimer?.cancel();
 
-    antennaSubscription?.cancel();
-    unawaited(antennaService.dispose());
-    jsonController.dispose();
+   antennaReconnectTimer?.cancel();
 
-    super.dispose();
-  }
+   antennaSubscription?.cancel();
+   antennaDisconnectSubscription?.cancel();
+
+   unawaited(antennaService.dispose());
+   jsonController.dispose();
+
+   super.dispose();
+ }
 
   Future<void> loadReceivedRecords() async {
     final loadedRecords = await LocalStorageService.loadTagRecords();
@@ -828,10 +849,16 @@ class _ReceivePageState extends State<ReceivePage>
     }).toList();
   }
 
-  Future<void> connectAntenna() async {
+    Future<void> connectAntenna({
+    bool isAutoReconnect = false,
+    }) async {
     if (isAntennaConnecting || isAntennaConnected || antennaService.isConnected) {
       return;
     }
+
+    cancelAntennaReconnect();
+
+    allowAntennaReconnect = true;
 
     setState(() {
       isAntennaConnecting = true;
@@ -841,14 +868,15 @@ class _ReceivePageState extends State<ReceivePage>
     try {
       await antennaSubscription?.cancel();
 
-      antennaSubscription = antennaService.jsonStream.listen(
-        (jsonText) async {
-          await processJsonText(
-            jsonText,
-            locationName: appSettings.defaultLocationName,
-            showSnackBar: false,
-          );
-        },
+   antennaSubscription = antennaService.jsonStream.listen(
+     (jsonText) async {
+       final generation = antennaConnectionGeneration;
+
+       await handleAntennaWebSocketText(
+         jsonText,
+         generation,
+       );
+     },
         onError: (error) {
           if (!mounted) return;
 
@@ -875,21 +903,52 @@ class _ReceivePageState extends State<ReceivePage>
       );
 
 
+      await antennaDisconnectSubscription?.cancel();
+
+      antennaDisconnectSubscription = antennaService.disconnectStream.listen(
+        (_) {
+          if (!mounted) return;
+
+          if (!allowAntennaReconnect) {
+            return;
+          }
+
+          setState(() {
+            isAntennaConnected = false;
+            antennaStatus = 'اتصال WebSocket قطع شد';
+          });
+
+          scheduleAntennaReconnect();
+        },
+      );
+
+
       setState(() {
         antennaStatus = 'در حال اتصال به WiFi آنتن...';
       });
 
-      await AntennaWifiConnector.connectToAntennaWifi();
+    if (!isAutoReconnect) {
+     await AntennaWifiConnector.connectToAntennaWifi();
 
-      await Future.delayed(
-        const Duration(milliseconds: 800),
-      );
+  await Future.delayed(
+    const Duration(milliseconds: 800),
+  );
+}
 
 
 
-      await antennaService.connect(
-        url: WifiAntennaService.defaultUrl,
-      );
+
+  await antennaService.connect(
+    url: appSettings.wifiWebSocketUrl,
+  );
+
+  antennaConnectionGeneration++;
+
+  setState(() {
+    antennaStatus = 'در حال ارسال ساعت گوشی به ESP...';
+  });
+
+  await antennaService.syncClockWithPhone();
 
       await LiveHerdSessionService.startSession(
         reset: true,
@@ -902,6 +961,8 @@ class _ReceivePageState extends State<ReceivePage>
       );
 
       if (!mounted) return;
+
+      antennaReconnectAttempt = 0;
 
       setState(() {
         isAntennaConnected = true;
@@ -929,17 +990,25 @@ class _ReceivePageState extends State<ReceivePage>
 
       if (!mounted) return;
 
-      setState(() {
-        isAntennaConnected = false;
-        antennaStatus = 'اتصال WiFi ناموفق';
-      });
+     setState(() {
+       isAntennaConnected = false;
+       antennaStatus = isAutoReconnect
+           ? 'اتصال مجدد ناموفق؛ تلاش دوباره انجام می‌شود'
+           : 'اتصال WiFi ناموفق';
+     });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('خطا در اتصال WiFi: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+     if (isAutoReconnect) {
+       scheduleAntennaReconnect();
+     }
+
+     if (!isAutoReconnect) {
+       ScaffoldMessenger.of(context).showSnackBar(
+         SnackBar(
+           content: Text('خطا در اتصال WiFi: $e'),
+           backgroundColor: Colors.red,
+         ),
+       );
+     }
     } finally {
       if (!mounted) return;
 
@@ -950,8 +1019,17 @@ class _ReceivePageState extends State<ReceivePage>
   }
 
  Future<void> disconnectAntenna() async {
+
+    allowAntennaReconnect = false;
+    cancelAntennaReconnect();
+
+
    await antennaSubscription?.cancel();
    antennaSubscription = null;
+
+   await antennaDisconnectSubscription?.cancel();
+     antennaDisconnectSubscription = null;
+
 
    await antennaService.disconnect();
    await AntennaWifiConnector.releaseWifiNetwork();
@@ -1005,6 +1083,221 @@ class _ReceivePageState extends State<ReceivePage>
  }
 
 
+ Future<void> handleAntennaWebSocketText(
+   String jsonText,
+   int generation,
+ ) async {
+   try {
+     final frame = AntennaWsFrame.parse(jsonText);
+
+    if (frame.isControlMessage) {
+      await handleAntennaControlFrame(frame);
+      return;
+    }
+
+     if (!frame.isDataMessage || !frame.hasRequiredDataFields) {
+       await UsbLogService.addLog(
+         type: UsbLogType.error,
+         title: 'پیام نامعتبر از ESP',
+         message: jsonText,
+       );
+
+       return;
+     }
+
+     final inboxMessage = frame.toInboxMessage();
+
+     final inserted = await DatabaseService.insertAntennaInboxMessage(
+       inboxMessage,
+     );
+
+     if (generation != antennaConnectionGeneration) {
+       return;
+     }
+
+     if (!antennaService.isConnected) {
+       return;
+     }
+
+     await antennaService.ack(inboxMessage.messageId);
+
+     if (!inserted) {
+       await UsbLogService.addLog(
+         type: UsbLogType.info,
+         title: 'پیام تکراری ESP تأیید شد',
+         message: inboxMessage.messageId,
+       );
+
+       return;
+     }
+
+     try {
+       await processJsonText(
+         jsonText,
+         locationName: appSettings.defaultLocationName,
+         showSnackBar: false,
+         skipDuplicateCheck: true,
+       );
+
+       await DatabaseService.markAntennaInboxMessageProcessed(
+         inboxMessage.messageId,
+       );
+     } catch (e) {
+       await DatabaseService.markAntennaInboxMessageError(
+         inboxMessage.messageId,
+         e,
+       );
+
+       await UsbLogService.addLog(
+         type: UsbLogType.error,
+         title: 'خطا در پردازش پیام ذخیره‌شده ESP',
+         message: e.toString(),
+       );
+     }
+   } catch (e) {
+     await UsbLogService.addLog(
+       type: UsbLogType.error,
+       title: 'خطا در تحلیل پیام WebSocket',
+       message: '$e\n$jsonText',
+     );
+
+     if (!mounted) return;
+
+     setState(() {
+       antennaStatus = 'پیام نامعتبر از ESP دریافت شد';
+     });
+   }
+ }
+
+Future<void> handleAntennaControlFrame(AntennaWsFrame frame) async {
+  if (!mounted) return;
+
+  final type = frame.type ?? '';
+
+  if (type == 'hello') {
+    setState(() {
+      antennaStatus = 'ارتباط با ESP برقرار شد';
+    });
+    return;
+  }
+
+  if (type == 'time_synced') {
+    setState(() {
+      antennaStatus = 'ساعت ESP تنظیم شد؛ در حال فعال‌سازی صف پیام‌ها...';
+    });
+
+    await antennaService.subscribe();
+    return;
+  }
+
+  if (type == 'time_error') {
+    setState(() {
+      antennaStatus = 'خطا در تنظیم ساعت ESP';
+      isAntennaConnected = false;
+    });
+    return;
+  }
+
+  if (type == 'time_busy') {
+    setState(() {
+      antennaStatus = 'ESP اجازه تنظیم ساعت نمی‌دهد؛ اتصال دیگری فعال است';
+      isAntennaConnected = false;
+    });
+    return;
+  }
+
+  if (type == 'time_status') {
+    setState(() {
+      antennaStatus = 'وضعیت ساعت ESP دریافت شد';
+    });
+    return;
+  }
+
+  if (type == 'subscribed') {
+    setState(() {
+      antennaStatus = 'صف پیام‌های ESP فعال شد';
+      isAntennaConnected = true;
+    });
+    return;
+  }
+
+  if (type == 'busy') {
+    setState(() {
+      antennaStatus = 'ESP در حال استفاده توسط یک اتصال دیگر است';
+      isAntennaConnected = false;
+    });
+    return;
+  }
+
+  if (type == 'storage_error') {
+    setState(() {
+      antennaStatus = 'خطای حافظه در ESP';
+      isAntennaConnected = false;
+    });
+    return;
+  }
+
+  if (type == 'ack_timeout') {
+    setState(() {
+      antennaStatus = 'مهلت ACK تمام شد؛ تلاش برای اتصال مجدد';
+      isAntennaConnected = false;
+    });
+
+    scheduleAntennaReconnect();
+    return;
+  }
+
+  setState(() {
+    antennaStatus = 'پیام کنترلی ESP: $type';
+  });
+}
+
+
+
+ void cancelAntennaReconnect() {
+   antennaReconnectTimer?.cancel();
+   antennaReconnectTimer = null;
+   antennaReconnectAttempt = 0;
+ }
+
+ void scheduleAntennaReconnect() {
+   if (!mounted) return;
+
+   if (!allowAntennaReconnect) {
+     return;
+   }
+
+
+   if (isAntennaConnecting || antennaService.isConnected) {
+     return;
+   }
+
+   if (antennaReconnectTimer?.isActive == true) {
+     return;
+   }
+
+   antennaReconnectAttempt++;
+
+   setState(() {
+     isAntennaConnected = false;
+     antennaStatus =
+         'اتصال قطع شد؛ تلاش مجدد $antennaReconnectAttempt تا ۳ ثانیه دیگر...';
+   });
+
+   antennaReconnectTimer = Timer(
+     const Duration(seconds: 3),
+     () {
+       if (!mounted) return;
+
+       connectAntenna(
+         isAutoReconnect: true,
+       );
+     },
+   );
+ }
+
+
+
 
   Future<AppLocationResult> getLocationForRecord() async {
     if (mounted) {
@@ -1027,42 +1320,44 @@ class _ReceivePageState extends State<ReceivePage>
     return result;
   }
 
-  Future<void> processJsonText(
-    String jsonText, {
-    required String locationName,
-    bool showSnackBar = true,
-  }) async {
+Future<void> processJsonText(
+  String jsonText, {
+  required String locationName,
+  bool showSnackBar = true,
+  bool skipDuplicateCheck = false,
+}) async {
     try {
       final payload = AntennaPayload.fromJsonString(jsonText.trim());
 
       final tagId = 'T-${payload.password}';
-      final signature = buildRecordSignature(payload);
+     if (!skipDuplicateCheck) {
+       final signature = buildRecordSignature(payload);
 
-      if (shouldSkipDuplicate(signature)) {
-        setState(() {
-          duplicateSkipCount++;
-          lastAntennaJson = jsonText.trim();
-          jsonController.text = jsonText.trim();
-          antennaStatus = 'داده تکراری نادیده گرفته شد: $tagId';
-        });
+       if (shouldSkipDuplicate(signature)) {
+         setState(() {
+           duplicateSkipCount++;
+           lastAntennaJson = jsonText.trim();
+           jsonController.text = jsonText.trim();
+           antennaStatus = 'داده تکراری نادیده گرفته شد: $tagId';
+         });
 
-        if (showSnackBar) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('رکورد تکراری ذخیره نشد: $tagId'),
-            ),
-          );
-        }
+         if (showSnackBar) {
+           ScaffoldMessenger.of(context).showSnackBar(
+             SnackBar(
+               content: Text('رکورد تکراری ذخیره نشد: $tagId'),
+             ),
+           );
+         }
 
-        await UsbLogService.addLog(
-          type: UsbLogType.duplicate,
-          title: 'رکورد تکراری نادیده گرفته شد',
-          message: '$tagId / $jsonText',
-        );
+         await UsbLogService.addLog(
+           type: UsbLogType.duplicate,
+           title: 'رکورد تکراری نادیده گرفته شد',
+           message: '$tagId / $jsonText',
+         );
 
-        return;
-      }
-
+         return;
+       }
+     }
       final camelProfile = await CamelProfileService.getOrCreateProfile(tagId);
 
       final locationResult = await getLocationForRecord();
