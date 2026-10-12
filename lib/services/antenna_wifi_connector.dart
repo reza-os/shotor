@@ -5,10 +5,13 @@ import 'package:flutter/services.dart';
 class AntennaWifiConnector {
   static const MethodChannel _channel = MethodChannel('saraban/wifi');
 
-  static const String ssid = 'Mobile_Antenna_ESP32';
-  static const String password = 'antenna123';
+  static const String defaultSsid = 'Mobile_Antenna_ESP32';
+  static const String defaultPassword = 'antenna123';
 
-  static Future<bool> connectToAntennaWifi() async {
+  static Future<bool> connectToAntennaWifi({
+    String ssid = defaultSsid,
+    String password = defaultPassword,
+  }) async {
     if (!Platform.isAndroid) {
       return true;
     }

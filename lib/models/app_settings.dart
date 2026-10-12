@@ -66,6 +66,12 @@ class AppSettings {
     String? centerPhone,
 
 
+    String? wifiSsid,
+    String? wifiPassword,
+    String? wifiWebSocketUrl,
+    bool? wifiAutoReconnect,
+
+
     String? herdId,
     String? herdName,
     int? camelCount,
@@ -107,6 +113,13 @@ class AppSettings {
       // دستگاه
       deviceId:
           deviceId ?? this.deviceId,
+
+
+
+        wifiSsid: wifiSsid ?? this.wifiSsid,
+        wifiPassword: wifiPassword ?? this.wifiPassword,
+        wifiWebSocketUrl: wifiWebSocketUrl ?? this.wifiWebSocketUrl,
+        wifiAutoReconnect: wifiAutoReconnect ?? this.wifiAutoReconnect,
 
 
       // سیستم

@@ -928,7 +928,10 @@ class _ReceivePageState extends State<ReceivePage>
       });
 
     if (!isAutoReconnect) {
-     await AntennaWifiConnector.connectToAntennaWifi();
+     await AntennaWifiConnector.connectToAntennaWifi(
+       ssid: appSettings.wifiSsid,
+       password: appSettings.wifiPassword,
+     );
 
   await Future.delayed(
     const Duration(milliseconds: 800),
@@ -1019,19 +1022,17 @@ class _ReceivePageState extends State<ReceivePage>
   }
 
  Future<void> disconnectAntenna() async {
-
-    allowAntennaReconnect = false;
-    cancelAntennaReconnect();
-
+   allowAntennaReconnect = false;
+   cancelAntennaReconnect();
 
    await antennaSubscription?.cancel();
    antennaSubscription = null;
 
    await antennaDisconnectSubscription?.cancel();
-     antennaDisconnectSubscription = null;
-
+   antennaDisconnectSubscription = null;
 
    await antennaService.disconnect();
+
    await AntennaWifiConnector.releaseWifiNetwork();
 
    await UsbLogService.addLog(
@@ -1094,6 +1095,27 @@ class _ReceivePageState extends State<ReceivePage>
       await handleAntennaControlFrame(frame);
       return;
     }
+
+
+
+    if (!frame.isControlMessage &&
+        frame.messageId == null &&
+        frame.password != null &&
+        frame.state != null &&
+        frame.lock != null &&
+        frame.counterLock != null &&
+        frame.batteryPercent != null &&
+        frame.count != null) {
+      await processJsonText(
+        jsonText,
+        locationName: appSettings.defaultLocationName,
+        showSnackBar: false,
+      );
+
+      return;
+    }
+
+
 
      if (!frame.isDataMessage || !frame.hasRequiredDataFields) {
        await UsbLogService.addLog(
@@ -7460,7 +7482,9 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
   final shepherdIdController = TextEditingController();
   final centerPhoneController = TextEditingController();
   final locationNameController = TextEditingController();
-  final baudRateController = TextEditingController();
+  final TextEditingController wifiSsidController = TextEditingController();
+  final TextEditingController wifiPasswordController = TextEditingController();
+  final TextEditingController wifiWebSocketUrlController = TextEditingController();
   final herdIdController = TextEditingController();
   final herdNameController = TextEditingController();
   final camelCountController = TextEditingController();
@@ -7469,6 +7493,7 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
   bool smsEnabled = true;
   bool isLoading = true;
   bool isSaving = false;
+  bool wifiAutoReconnect = true;
 
   @override
   void initState() {
@@ -7490,7 +7515,11 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
    deviceIdController.dispose();
 
    locationNameController.dispose();
-   baudRateController.dispose();
+
+
+   wifiSsidController.dispose();
+   wifiPasswordController.dispose();
+   wifiWebSocketUrlController.dispose();
 
    super.dispose();
  }
@@ -7498,44 +7527,33 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
   Future<void> loadSettings() async {
     final settings = await AppSettingsService.loadSettings();
 
-    shepherdNameController.text = settings.shepherdName;
-    shepherdIdController.text = settings.shepherdId;
-    centerPhoneController.text = settings.centerPhone;
-    locationNameController.text = settings.defaultLocationName;
-    baudRateController.text = settings.usbBaudRate.toString();
-    herdIdController.text =
-        settings.herdId;
-
-    herdNameController.text =
-        settings.herdName;
-
-    camelCountController.text =
-        settings.camelCount.toString();
-
-    deviceIdController.text =
-        settings.deviceId;
-
     if (!mounted) return;
 
     setState(() {
+      shepherdNameController.text = settings.shepherdName;
+      shepherdIdController.text = settings.shepherdId;
+      centerPhoneController.text = settings.centerPhone;
+
+      locationNameController.text = settings.defaultLocationName;
+
+      wifiSsidController.text = settings.wifiSsid;
+      wifiPasswordController.text = settings.wifiPassword;
+      wifiWebSocketUrlController.text = settings.wifiWebSocketUrl;
+      wifiAutoReconnect = settings.wifiAutoReconnect;
+
+      herdIdController.text = settings.herdId;
+      herdNameController.text = settings.herdName;
+      camelCountController.text = settings.camelCount.toString();
+      deviceIdController.text = settings.deviceId;
+
       smsEnabled = settings.smsEnabled;
       isLoading = false;
     });
   }
 
   Future<void> saveSettings() async {
-    final baudRateText = baudRateController.text.trim();
-    final baudRate = int.tryParse(baudRateText);
 
-    if (baudRate == null || baudRate <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('سرعت USB معتبر نیست. مثلاً 9600 یا 115200 وارد کن.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
+
 
     setState(() {
       isSaving = true;
@@ -7557,6 +7575,21 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
          centerPhoneController.text.trim(),
 
 
+         wifiSsid: wifiSsidController.text.trim().isEmpty
+             ? 'Mobile_Antenna_ESP32'
+             : wifiSsidController.text.trim(),
+
+         wifiPassword: wifiPasswordController.text.trim().isEmpty
+             ? 'antenna123'
+             : wifiPasswordController.text.trim(),
+
+         wifiWebSocketUrl: wifiWebSocketUrlController.text.trim().isEmpty
+             ? 'ws://192.168.4.1:81/'
+             : wifiWebSocketUrlController.text.trim(),
+
+         wifiAutoReconnect: wifiAutoReconnect,
+
+
      herdId:
          herdIdController.text.trim(),
 
@@ -7576,13 +7609,10 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
              : deviceIdController.text.trim(),
 
 
-     defaultLocationName:
-         locationNameController.text.trim().isEmpty
-             ? 'دریافت از USB'
-             : locationNameController.text.trim(),
-
-     usbBaudRate:
-         baudRate,
+    defaultLocationName:
+        locationNameController.text.trim().isEmpty
+            ? 'دریافت از WiFi آنتن'
+            : locationNameController.text.trim(),
 
      smsEnabled:
          smsEnabled,
@@ -7750,23 +7780,67 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const SectionTitle(title: 'تنظیمات دریافت USB'),
+                              const SectionTitle(title: 'تنظیمات آنتن WiFi'),
+
                               buildTextField(
-                                controller: baudRateController,
-                                label: 'سرعت USB / Baud Rate',
+                                controller: wifiSsidController,
+                                label: 'نام WiFi آنتن',
                                 icon: Icons.wifi_rounded,
-                                keyboardType: TextInputType.number,
                                 textDirection: TextDirection.ltr,
                               ),
+
+                              const SizedBox(height: 12),
+
+                              buildTextField(
+                                controller: wifiPasswordController,
+                                label: 'رمز WiFi آنتن',
+                                icon: Icons.lock_rounded,
+                                textDirection: TextDirection.ltr,
+                              ),
+
+                              const SizedBox(height: 12),
+
+                              buildTextField(
+                                controller: wifiWebSocketUrlController,
+                                label: 'آدرس WebSocket',
+                                icon: Icons.link_rounded,
+                                textDirection: TextDirection.ltr,
+                              ),
+
                               const SizedBox(height: 8),
+
                               const Text(
-                                'مقدارهای رایج: 9600، 57600، 115200',
+                                'پیش‌فرض: ws://192.168.4.1:81/',
                                 style: TextStyle(
                                   color: Colors.black54,
                                   fontSize: 12,
                                 ),
                               ),
+
                               const SizedBox(height: 12),
+
+                              SwitchListTile(
+                                value: wifiAutoReconnect,
+                                onChanged: (value) {
+                                  setState(() {
+                                    wifiAutoReconnect = value;
+                                  });
+                                },
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text(
+                                  'اتصال مجدد خودکار',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                subtitle: const Text(
+                                  'اگر اتصال WebSocket قطع شد، برنامه دوباره تلاش کند وصل شود.',
+                                ),
+                                secondary: const Icon(Icons.sync_rounded),
+                              ),
+
+                              const SizedBox(height: 12),
+
                               buildTextField(
                                 controller: locationNameController,
                                 label: 'نام محل پیش‌فرض دریافت',
@@ -9126,6 +9200,9 @@ class _SmsReportSettingsPageState extends State<SmsReportSettingsPage> {
     super.dispose();
   }
 
+
+
+
   Future<void> loadSettings() async {
     final loadedSettings = await SmsReportSettingsService.loadSettings();
 
@@ -9137,6 +9214,9 @@ class _SmsReportSettingsPageState extends State<SmsReportSettingsPage> {
       isLoading = false;
     });
   }
+
+
+
 
   Future<void> saveSettings(SmsReportSettings newSettings) async {
     settings = newSettings.copyWith(
