@@ -2,57 +2,63 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../models/usb_log.dart';
+import '../models/antenna_log.dart';
 
-class UsbLogService {
-  static const String _usbLogsKey = 'usb_logs';
-  static const int _maxLogs = 150;
+class AntennaLogService {
+  static const String storageKey = 'usb_logs';
 
-  static Future<List<UsbLog>> loadLogs() async {
+  static Future<List<AntennaLog>> loadLogs() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonString = prefs.getString(_usbLogsKey);
 
-    if (jsonString == null || jsonString.isEmpty) {
+    final jsonText = prefs.getString(storageKey);
+
+    if (jsonText == null || jsonText.trim().isEmpty) {
       return [];
     }
 
     try {
-      final decoded = jsonDecode(jsonString);
+      final decoded = jsonDecode(jsonText);
 
       if (decoded is! List) {
         return [];
       }
 
-      return decoded.map((item) {
-        return UsbLog.fromJson(
-          Map<String, dynamic>.from(item as Map),
-        );
-      }).toList();
+      return decoded
+          .map((item) {
+            return AntennaLog.fromJson(
+              Map<String, dynamic>.from(item),
+            );
+          })
+          .toList();
     } catch (_) {
       return [];
     }
   }
 
-  static Future<void> saveLogs(List<UsbLog> logs) async {
+  static Future<void> saveLogs(List<AntennaLog> logs) async {
     final prefs = await SharedPreferences.getInstance();
 
-    final limitedLogs = logs.take(_maxLogs).toList();
-    final jsonList = limitedLogs.map((log) => log.toJson()).toList();
-    final jsonString = jsonEncode(jsonList);
+    final limitedLogs = logs.take(300).toList();
 
-    await prefs.setString(_usbLogsKey, jsonString);
+    final jsonList = limitedLogs.map((log) => log.toJson()).toList();
+
+    await prefs.setString(
+      storageKey,
+      jsonEncode(jsonList),
+    );
   }
 
   static Future<void> addLog({
-    required UsbLogType type,
+    required AntennaLogType type,
     required String title,
     required String message,
   }) async {
     final logs = await loadLogs();
+
     final now = DateTime.now();
 
-    final log = UsbLog(
-      id: '${type.name}-${now.millisecondsSinceEpoch}',
+    final log = AntennaLog(
+      id: 'antenna-log-${now.millisecondsSinceEpoch}',
       type: type,
       title: title,
       message: message,
@@ -66,6 +72,7 @@ class UsbLogService {
 
   static Future<void> clearLogs() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_usbLogsKey);
+
+    await prefs.remove(storageKey);
   }
 }

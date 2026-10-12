@@ -30,8 +30,8 @@ import 'services/wifi_antenna_service.dart';
 import 'services/alert_service.dart';
 import 'models/app_settings.dart';
 import 'services/app_setting_service.dart';
-import 'models/usb_log.dart';
-import 'services/usb_log_service.dart';
+import 'models/antenna_log.dart';
+import 'services/antenna_log_service.dart';
 import 'services/location_service.dart';
 
 import 'services/zone_check_service.dart';
@@ -957,8 +957,8 @@ class _ReceivePageState extends State<ReceivePage>
         reset: true,
       );
 
-      await UsbLogService.addLog(
-        type: UsbLogType.connected,
+      await AntennaLogService.addLog(
+        type: AntennaLogType.connected,
         title: 'اتصال WiFi برقرار شد',
         message: antennaService.connectedDeviceName,
       );
@@ -985,8 +985,8 @@ class _ReceivePageState extends State<ReceivePage>
 
       await antennaService.disconnect();
 
-      await UsbLogService.addLog(
-        type: UsbLogType.error,
+      await AntennaLogService.addLog(
+        type: AntennaLogType.error,
         title: 'خطا در اتصال WiFi',
         message: e.toString(),
       );
@@ -1035,8 +1035,8 @@ class _ReceivePageState extends State<ReceivePage>
 
    await AntennaWifiConnector.releaseWifiNetwork();
 
-   await UsbLogService.addLog(
-     type: UsbLogType.disconnected,
+   await AntennaLogService.addLog(
+     type: AntennaLogType.disconnected,
      title: 'اتصال WiFi قطع شد',
      message: 'کاربر اتصال WiFi آنتن را قطع کرد.',
    );
@@ -1118,8 +1118,8 @@ class _ReceivePageState extends State<ReceivePage>
 
 
      if (!frame.isDataMessage || !frame.hasRequiredDataFields) {
-       await UsbLogService.addLog(
-         type: UsbLogType.error,
+       await AntennaLogService.addLog(
+         type: AntennaLogType.error,
          title: 'پیام نامعتبر از ESP',
          message: jsonText,
        );
@@ -1144,8 +1144,8 @@ class _ReceivePageState extends State<ReceivePage>
      await antennaService.ack(inboxMessage.messageId);
 
      if (!inserted) {
-       await UsbLogService.addLog(
-         type: UsbLogType.info,
+       await AntennaLogService.addLog(
+         type: AntennaLogType.info,
          title: 'پیام تکراری ESP تأیید شد',
          message: inboxMessage.messageId,
        );
@@ -1170,15 +1170,15 @@ class _ReceivePageState extends State<ReceivePage>
          e,
        );
 
-       await UsbLogService.addLog(
-         type: UsbLogType.error,
+       await AntennaLogService.addLog(
+         type: AntennaLogType.error,
          title: 'خطا در پردازش پیام ذخیره‌شده ESP',
          message: e.toString(),
        );
      }
    } catch (e) {
-     await UsbLogService.addLog(
-       type: UsbLogType.error,
+     await AntennaLogService.addLog(
+       type: AntennaLogType.error,
        title: 'خطا در تحلیل پیام WebSocket',
        message: '$e\n$jsonText',
      );
@@ -1371,8 +1371,8 @@ Future<void> processJsonText(
            );
          }
 
-         await UsbLogService.addLog(
-           type: UsbLogType.duplicate,
+         await AntennaLogService.addLog(
+           type: AntennaLogType.duplicate,
            title: 'رکورد تکراری نادیده گرفته شد',
            message: '$tagId / $jsonText',
          );
@@ -1391,8 +1391,8 @@ Future<void> processJsonText(
       } else {
         finalLocationName = '$locationName بدون GPS';
 
-        await UsbLogService.addLog(
-          type: UsbLogType.info,
+        await AntennaLogService.addLog(
+          type: AntennaLogType.info,
           title: 'GPS ثبت نشد',
           message: locationResult.message,
         );
@@ -1416,8 +1416,8 @@ Future<void> processJsonText(
 
       await LocalStorageService.addTagRecord(record);
 
-      await UsbLogService.addLog(
-        type: UsbLogType.received,
+      await AntennaLogService.addLog(
+        type: AntennaLogType.received,
         title: 'رکورد جدید ذخیره شد',
         message: '${record.camelName} / ${record.tagId} / ${record.batteryText}',
       );
@@ -1452,8 +1452,8 @@ Future<void> processJsonText(
         ),
       );
 
-      await UsbLogService.addLog(
-        type: UsbLogType.invalidJson,
+      await AntennaLogService.addLog(
+        type: AntennaLogType.invalidJson,
         title: 'خطا در خواندن JSON',
         message: '${e.toString()} / $jsonText',
       );
@@ -5736,7 +5736,7 @@ class MorePage extends StatelessWidget {
                               onTap: () {
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
-                                    builder: (_) => const UsbLogsPage(),
+                                    builder: (_) => const AntennaLogsPage(),
                                   ),
                                 );
                               },
@@ -7949,16 +7949,16 @@ class _SystemSettingsPageState extends State<SystemSettingsPage> {
   }
 }
 
-class UsbLogsPage extends StatefulWidget {
-  const UsbLogsPage({super.key});
+class AntennaLogsPage extends StatefulWidget {
+  const AntennaLogsPage({super.key});
 
   @override
-  State<UsbLogsPage> createState() => _UsbLogsPageState();
+  State<AntennaLogsPage> createState() => _AntennaLogsPageState();
 }
 
-class _UsbLogsPageState extends State<UsbLogsPage> {
+class _AntennaLogsPageState extends State<AntennaLogsPage> {
   bool isLoading = true;
-  List<UsbLog> logs = [];
+  List<AntennaLog> logs = [];
 
   @override
   void initState() {
@@ -7967,7 +7967,7 @@ class _UsbLogsPageState extends State<UsbLogsPage> {
   }
 
   Future<void> loadLogs() async {
-    final loadedLogs = await UsbLogService.loadLogs();
+    final loadedLogs = await AntennaLogService.loadLogs();
 
     if (!mounted) return;
 
@@ -8014,7 +8014,7 @@ class _UsbLogsPageState extends State<UsbLogsPage> {
 
     if (confirm != true) return;
 
-    await UsbLogService.clearLogs();
+    await AntennaLogService.clearLogs();
 
     if (!mounted) return;
 
@@ -8029,16 +8029,16 @@ class _UsbLogsPageState extends State<UsbLogsPage> {
     );
   }
 
-  int countByType(UsbLogType type) {
+  int countByType(AntennaLogType type) {
     return logs.where((log) => log.type == type).length;
   }
 
   @override
   Widget build(BuildContext context) {
-    final receivedCount = countByType(UsbLogType.received);
-    final duplicateCount = countByType(UsbLogType.duplicate);
+    final receivedCount = countByType(AntennaLogType.received);
+    final duplicateCount = countByType(AntennaLogType.duplicate);
     final errorCount = logs.where((log) {
-      return log.type == UsbLogType.error || log.type == UsbLogType.invalidJson;
+      return log.type == AntennaLogType.error || log.type == AntennaLogType.invalidJson;
     }).length;
 
     return Directionality(
@@ -8165,7 +8165,7 @@ class _UsbLogsPageState extends State<UsbLogsPage> {
                           )
                         else
                           ...logs.map(
-                            (log) => UsbLogCard(log: log),
+                            (log) => AntennaLogCard(log: log),
                           ),
                         const SizedBox(height: 40),
                       ],
@@ -8180,48 +8180,60 @@ class _UsbLogsPageState extends State<UsbLogsPage> {
 
 
 
-class UsbLogCard extends StatelessWidget {
-  final UsbLog log;
+class AntennaLogCard extends StatelessWidget {
+  final AntennaLog log;
 
-  const UsbLogCard({
+  const AntennaLogCard({
     super.key,
     required this.log,
   });
 
-  Color get color {
-    switch (log.type) {
-      case UsbLogType.connected:
-        return const Color(0xFF008B62);
-      case UsbLogType.disconnected:
-        return const Color(0xFF7B3FB3);
-      case UsbLogType.received:
-        return const Color(0xFF086EBB);
-      case UsbLogType.duplicate:
-        return const Color(0xFFE87500);
-      case UsbLogType.invalidJson:
-        return const Color(0xFFD32F2F);
-      case UsbLogType.error:
-        return const Color(0xFFD32F2F);
-      case UsbLogType.info:
-        return Colors.grey;
-    }
-  }
+ Color get color {
+   switch (log.type) {
+     case AntennaLogType.connected:
+       return const Color(0xFF008B62);
+
+     case AntennaLogType.disconnected:
+       return const Color(0xFFE87500);
+
+     case AntennaLogType.received:
+       return const Color(0xFF086EBB);
+
+     case AntennaLogType.duplicate:
+       return const Color(0xFF6A1B9A);
+
+     case AntennaLogType.invalidJson:
+       return const Color(0xFFD32F2F);
+
+     case AntennaLogType.error:
+       return const Color(0xFFD32F2F);
+
+     case AntennaLogType.info:
+       return const Color(0xFF607D8B);
+   }
+ }
 
   IconData get icon {
     switch (log.type) {
-      case UsbLogType.connected:
+      case AntennaLogType.connected:
         return Icons.wifi_rounded;
-      case UsbLogType.disconnected:
+
+      case AntennaLogType.disconnected:
         return Icons.wifi_off_rounded;
-      case UsbLogType.received:
-        return Icons.check_circle_rounded;
-      case UsbLogType.duplicate:
+
+      case AntennaLogType.received:
+        return Icons.download_done_rounded;
+
+      case AntennaLogType.duplicate:
         return Icons.copy_rounded;
-      case UsbLogType.invalidJson:
-        return Icons.data_object_rounded;
-      case UsbLogType.error:
+
+      case AntennaLogType.invalidJson:
+        return Icons.code_off_rounded;
+
+      case AntennaLogType.error:
         return Icons.error_rounded;
-      case UsbLogType.info:
+
+      case AntennaLogType.info:
         return Icons.info_rounded;
     }
   }
