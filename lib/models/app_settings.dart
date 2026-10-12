@@ -22,7 +22,6 @@ class AppSettings {
 
   // تنظیمات سیستم
   final String defaultLocationName;
-  final int usbBaudRate;
   final bool smsEnabled;
 
 
@@ -52,7 +51,6 @@ class AppSettings {
 
     // سیستم
     this.defaultLocationName = 'دریافت از wifi',
-    this.usbBaudRate = 115200,
     this.smsEnabled = true,
 
   });
@@ -81,7 +79,6 @@ class AppSettings {
 
 
     String? defaultLocationName,
-    int? usbBaudRate,
     bool? smsEnabled,
 
   }) {
@@ -126,8 +123,6 @@ class AppSettings {
       defaultLocationName:
           defaultLocationName ?? this.defaultLocationName,
 
-      usbBaudRate:
-          usbBaudRate ?? this.usbBaudRate,
 
       smsEnabled:
           smsEnabled ?? this.smsEnabled,
@@ -180,8 +175,6 @@ class AppSettings {
       'defaultLocationName':
           defaultLocationName,
 
-      'usbBaudRate':
-          usbBaudRate,
 
       'smsEnabled':
           smsEnabled,
@@ -238,9 +231,6 @@ class AppSettings {
       // سیستم
       defaultLocationName:
           json['defaultLocationName'] ?? 'دریافت از wifi',
-
-      usbBaudRate:
-          json['usbBaudRate'] ?? 115200,
 
       smsEnabled:
           json['smsEnabled'] ?? true,
