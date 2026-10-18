@@ -32,7 +32,7 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE tag_records (
@@ -56,6 +56,7 @@ class DatabaseService {
           )
         ''');
         await _createAntennaInboxTable(db);
+        await _addAntennaInboxClockColumns(db);
       },
      onUpgrade: (db, oldVersion, newVersion) async {
        if (oldVersion < 2) {
@@ -66,6 +67,9 @@ class DatabaseService {
 
        if (oldVersion < 3) {
          await _createAntennaInboxTable(db);
+       }
+       if (oldVersion < 4) {
+         await _addAntennaInboxClockColumns(db);
        }
      },
     );
@@ -106,18 +110,31 @@ class DatabaseService {
 
 
 
+  /// Version 4. Keep this separate from the v3 table creation so upgrading
+  /// directly from v1/v2 to v4 never tries to add a column twice.
+  static Future<void> _addAntennaInboxClockColumns(Database db) async {
+    await db.execute('ALTER TABLE antenna_inbox ADD COLUMN rx_unix_ms INTEGER');
+    await db.execute('ALTER TABLE antenna_inbox ADD COLUMN rx_time TEXT');
+    await db.execute('ALTER TABLE antenna_inbox ADD COLUMN rx_time_valid INTEGER');
+    await db.execute('ALTER TABLE antenna_inbox ADD COLUMN rx_time_source TEXT');
+  }
+
   static Future<bool> insertAntennaInboxMessage(
     AntennaInboxMessage message,
   ) async {
     final db = await database;
 
-    final result = await db.insert(
-      'antenna_inbox',
-      message.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
-
-    return result != 0;
+    // SELECT changes() is evaluated in the same transaction as the INSERT.
+    // An ignored duplicate must return false, not the previous last_insert_rowid.
+    return db.transaction((txn) async {
+      await txn.insert(
+        'antenna_inbox',
+        message.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      final changes = Sqflite.firstIntValue(await txn.rawQuery('SELECT changes()'));
+      return changes == 1;
+    });
   }
 
   static Future<bool> antennaInboxMessageExists(String messageId) async {

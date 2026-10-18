@@ -5,12 +5,34 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/antenna_log.dart';
 
 class AntennaLogService {
-  static const String storageKey = 'usb_logs';
+  static const String storageKey = 'antenna_logs';
+  static const String oldStorageKey = 'usb_logs';
+
+  static Future<String?> _loadRawLogsJson(
+    SharedPreferences prefs,
+  ) async {
+    final currentJson = prefs.getString(storageKey);
+
+    if (currentJson != null && currentJson.trim().isNotEmpty) {
+      return currentJson;
+    }
+
+    final oldJson = prefs.getString(oldStorageKey);
+
+    if (oldJson != null && oldJson.trim().isNotEmpty) {
+      await prefs.setString(storageKey, oldJson);
+      await prefs.remove(oldStorageKey);
+
+      return oldJson;
+    }
+
+    return null;
+  }
 
   static Future<List<AntennaLog>> loadLogs() async {
     final prefs = await SharedPreferences.getInstance();
 
-    final jsonText = prefs.getString(storageKey);
+    final jsonText = await _loadRawLogsJson(prefs);
 
     if (jsonText == null || jsonText.trim().isEmpty) {
       return [];
@@ -46,6 +68,8 @@ class AntennaLogService {
       storageKey,
       jsonEncode(jsonList),
     );
+
+    await prefs.remove(oldStorageKey);
   }
 
   static Future<void> addLog({
@@ -74,5 +98,6 @@ class AntennaLogService {
     final prefs = await SharedPreferences.getInstance();
 
     await prefs.remove(storageKey);
+    await prefs.remove(oldStorageKey);
   }
 }

@@ -89,6 +89,30 @@ class AntennaWsFrame {
     return _readInt('RxUptimeMs');
   }
 
+  // These fields are optional because older firmware may not include them.
+  // Only RxUnixMs is a candidate timestamp; RxTime is preserved for inspection.
+  int? get rxUnixMs => _readInt('RxUnixMs');
+
+  bool? get rxTimeValid {
+    final value = json['RxTimeValid'];
+    if (value is bool) return value;
+    if (value is num) return value == 1 ? true : (value == 0 ? false : null);
+    if (value is String) {
+      switch (value.toLowerCase().trim()) {
+        case 'true':
+        case '1':
+          return true;
+        case 'false':
+        case '0':
+          return false;
+      }
+    }
+    return null;
+  }
+
+  String? get rxTime => json['RxTime']?.toString();
+  String? get rxTimeSource => json['RxTimeSource']?.toString();
+
   bool get hasRequiredDataFields {
     return messageId != null &&
         password != null &&
@@ -117,6 +141,10 @@ class AntennaWsFrame {
       count: count!,
       rxBootId: rxBootId,
       rxUptimeMs: rxUptimeMs,
+      rxUnixMs: rxUnixMs,
+      rxTime: rxTime,
+      rxTimeValid: rxTimeValid,
+      rxTimeSource: rxTimeSource,
       rawJson: rawJson,
       receivedAtApp: DateTime.now(),
     );

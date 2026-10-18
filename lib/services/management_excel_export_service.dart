@@ -335,7 +335,7 @@ class ManagementExcelExportService {
         excel,
         printableSheet,
         [
-          'برای این تاریخ رکوردی ثبت نشده است. وضعیت دریافت دستگاه، GPS و اتصال USB بررسی شود.'
+          'برای این تاریخ رکوردی ثبت نشده است. وضعیت دریافت آنتن WiFi، GPS و اتصال دستگاه بررسی شود.'
         ],
       );
     } else if (summary.importantProblemsCount == 0 &&

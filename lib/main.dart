@@ -56,6 +56,9 @@ import 'services/antenna_wifi_connector.dart';
 import 'models/antenna_ws_frame.dart';
 import 'services/database_service.dart';
 
+import 'services/antenna_receive_processor.dart';
+
+
 
 
 void main() async {
@@ -732,6 +735,11 @@ class _ReceivePageState extends State<ReceivePage>
 
   final WifiAntennaService antennaService = WifiAntennaService();
 
+
+  final AntennaReceiveProcessor receiveProcessor = AntennaReceiveProcessor();
+
+
+
   static const int duplicateIgnoreSeconds = 10;
 
   final Map<String, DateTime> recentRecordSignatures = {};
@@ -1348,130 +1356,95 @@ Future<void> processJsonText(
   bool showSnackBar = true,
   bool skipDuplicateCheck = false,
 }) async {
-    try {
-      final payload = AntennaPayload.fromJsonString(jsonText.trim());
-
-      final tagId = 'T-${payload.password}';
-     if (!skipDuplicateCheck) {
-       final signature = buildRecordSignature(payload);
-
-       if (shouldSkipDuplicate(signature)) {
-         setState(() {
-           duplicateSkipCount++;
-           lastAntennaJson = jsonText.trim();
-           jsonController.text = jsonText.trim();
-           antennaStatus = 'داده تکراری نادیده گرفته شد: $tagId';
-         });
-
-         if (showSnackBar) {
-           ScaffoldMessenger.of(context).showSnackBar(
-             SnackBar(
-               content: Text('رکورد تکراری ذخیره نشد: $tagId'),
-             ),
-           );
-         }
-
-         await AntennaLogService.addLog(
-           type: AntennaLogType.duplicate,
-           title: 'رکورد تکراری نادیده گرفته شد',
-           message: '$tagId / $jsonText',
-         );
-
-         return;
-       }
-     }
-      final camelProfile = await CamelProfileService.getOrCreateProfile(tagId);
-
-      final locationResult = await getLocationForRecord();
-
-      String finalLocationName = locationName;
-
-      if (locationResult.success) {
-        finalLocationName = '$locationName + GPS گوشی';
-      } else {
-        finalLocationName = '$locationName بدون GPS';
-
-        await AntennaLogService.addLog(
-          type: AntennaLogType.info,
-          title: 'GPS ثبت نشد',
-          message: locationResult.message,
-        );
-      }
-
-      final record = payload.toTagRecord(
-        locationName: finalLocationName,
-        camelNo: camelProfile.camelNo,
-        camelName: camelProfile.camelName,
-        latitude: locationResult.latitude,
-        longitude: locationResult.longitude,
-        accuracy: locationResult.accuracy,
-      );
-
-      setState(() {
-        lastAntennaJson = jsonText.trim();
-        jsonController.text = jsonText.trim();
-        receivedRecords.insert(0, record);
-        antennaStatus = isAntennaConnected ? 'دریافت شد: ${record.tagId}' : antennaStatus;
-      });
-
-      await LocalStorageService.addTagRecord(record);
-
-      await AntennaLogService.addLog(
-        type: AntennaLogType.received,
-        title: 'رکورد جدید ذخیره شد',
-        message: '${record.camelName} / ${record.tagId} / ${record.batteryText}',
-      );
-
-      await createAlertsForRecord(record);
-
-      if (!mounted) return;
-
-      if (showSnackBar) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('داده پردازش و ذخیره شد: ${record.tagId}'),
-          ),
-        );
-      }
-    } catch (e) {
-      final now = DateTime.now();
-      final hour = now.hour.toString().padLeft(2, '0');
-      final minute = now.minute.toString().padLeft(2, '0');
-
-      await AlertService.addAlert(
-        AppAlert(
-          id: 'json-error-${now.millisecondsSinceEpoch}',
-          title: 'خطای خواندن داده wifi',
-          subtitle: 'JSON دریافتی از دستگاه معتبر نبود.',
-          time: '$hour:$minute',
-          locationName: 'دریافت wifi',
-          type: AlertType.antennaError,
-          level: AlertLevel.warning,
-          messageSent: false,
-          reviewed: false,
-        ),
-      );
-
-      await AntennaLogService.addLog(
-        type: AntennaLogType.invalidJson,
-        title: 'خطا در خواندن JSON',
-        message: '${e.toString()} / $jsonText',
-      );
-
+  final result = await receiveProcessor.processJsonText(
+    jsonText: jsonText,
+    locationName: locationName,
+    skipDuplicateCheck: skipDuplicateCheck,
+    onLocationStarted: () {
       if (!mounted) return;
 
       setState(() {
-        antennaStatus = 'JSON نامعتبر';
+        isGettingLocation = true;
+        gpsStatus = 'در حال دریافت GPS...';
       });
+    },
+    onLocationFinished: (locationResult) {
+      if (!mounted) return;
 
+      setState(() {
+        isGettingLocation = false;
+        lastLocationResult = locationResult;
+        gpsStatus = locationResult.message;
+      });
+    },
+  );
+
+  if (!mounted) return;
+
+  if (result.isDuplicate) {
+    setState(() {
+      duplicateSkipCount++;
+      lastAntennaJson = result.jsonText;
+      jsonController.text = result.jsonText;
+      antennaStatus = 'داده تکراری نادیده گرفته شد: ${result.tagId}';
+    });
+
+    if (showSnackBar) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطا در خواندن JSON: $e'),
+          content: Text(result.message),
+        ),
+      );
+    }
+
+    return;
+  }
+
+  if (result.isInvalidJson) {
+    setState(() {
+      lastAntennaJson = result.jsonText;
+      jsonController.text = result.jsonText;
+      antennaStatus = 'JSON نامعتبر';
+    });
+
+    if (showSnackBar) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message),
           backgroundColor: Colors.red,
         ),
       );
     }
+
+    return;
   }
+
+  final record = result.record;
+
+  if (record == null) {
+    return;
+  }
+
+  setState(() {
+    lastAntennaJson = result.jsonText;
+    jsonController.text = result.jsonText;
+    receivedRecords.insert(0, record);
+
+    if (isAntennaConnected) {
+      antennaStatus = 'دریافت شد: ${record.tagId}';
+    }
+  });
+
+  if (showSnackBar) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(result.message),
+      ),
+    );
+  }
+}
+
+
 
   Future<void> processManualJson() async {
     await processJsonText(
@@ -5755,7 +5728,7 @@ class MorePage extends StatelessWidget {
                                 style: TextStyle(fontWeight: FontWeight.bold),
                               ),
                               subtitle: const Text(
-                                'شماره مرکز، سرعت USB و تنظیمات پیامک',
+                                'شماره مرکز، تنظیمات آنتن WiFi و پیامک',
                               ),
                               trailing: const Icon(Icons.chevron_left_rounded),
                               onTap: () {
@@ -7057,7 +7030,7 @@ Future<void> saveAndShareCsvFile() async {
                                 ),
                                 SizedBox(height: 8),
                                 Text(
-                                  'از صفحه دریافت، JSON را پردازش کن یا دستگاه USB را وصل کن.',
+                                  'از صفحه دریافت، اتصال WiFi آنتن را برقرار کن یا JSON دستی پردازش کن.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: Colors.black54,
@@ -7986,7 +7959,7 @@ class _AntennaLogsPageState extends State<AntennaLogsPage> {
           child: AlertDialog(
             title: const Text('پاک‌سازی لاگ‌ها'),
             content: const Text(
-              'آیا مطمئنی همه لاگ‌های USB پاک شوند؟ رکوردهای دریافت‌شده پاک نمی‌شوند.',
+              'آیا مطمئنی همه لاگ‌های آنتن WiFi پاک شوند؟ رکوردهای دریافت‌شده پاک نمی‌شوند.',
             ),
             actions: [
               TextButton(
@@ -8024,7 +7997,7 @@ class _AntennaLogsPageState extends State<AntennaLogsPage> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('لاگ‌های USB پاک شدند.'),
+        content: Text('لاگ‌های آنتن WiFi پاک شدند.'),
       ),
     );
   }
@@ -8046,7 +8019,7 @@ class _AntennaLogsPageState extends State<AntennaLogsPage> {
       child: Scaffold(
         backgroundColor: const Color(0xFFF5F7FA),
         appBar: AppBar(
-          title: const Text('لاگ دریافت USB'),
+          title: const Text('لاگ دریافت آنتن WiFi'),
           centerTitle: true,
           backgroundColor: const Color(0xFF062C5E),
           foregroundColor: Colors.white,

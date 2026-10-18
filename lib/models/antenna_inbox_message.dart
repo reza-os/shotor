@@ -11,6 +11,10 @@ class AntennaInboxMessage {
     required this.receivedAtApp,
     this.rxBootId,
     this.rxUptimeMs,
+    this.rxUnixMs,
+    this.rxTime,
+    this.rxTimeValid,
+    this.rxTimeSource,
     this.processed = false,
     this.processedAt,
     this.processingError,
@@ -27,6 +31,12 @@ class AntennaInboxMessage {
 
   final String? rxBootId;
   final int? rxUptimeMs;
+
+  // Optional ESP32 clock metadata. These do not replace receivedAtApp.
+  final int? rxUnixMs;
+  final String? rxTime;
+  final bool? rxTimeValid;
+  final String? rxTimeSource;
 
   final String rawJson;
 
@@ -47,6 +57,10 @@ class AntennaInboxMessage {
       'count_value': count,
       'rx_boot_id': rxBootId,
       'rx_uptime_ms': rxUptimeMs,
+      'rx_unix_ms': rxUnixMs,
+      'rx_time': rxTime,
+      'rx_time_valid': rxTimeValid == null ? null : (rxTimeValid! ? 1 : 0),
+      'rx_time_source': rxTimeSource,
       'raw_json': rawJson,
       'received_at_app': receivedAtApp.toIso8601String(),
       'processed': processed ? 1 : 0,
@@ -66,6 +80,12 @@ class AntennaInboxMessage {
       count: map['count_value'] as int,
       rxBootId: map['rx_boot_id'] as String?,
       rxUptimeMs: map['rx_uptime_ms'] as int?,
+      rxUnixMs: map['rx_unix_ms'] as int?,
+      rxTime: map['rx_time'] as String?,
+      rxTimeValid: map['rx_time_valid'] == null
+          ? null
+          : (map['rx_time_valid'] as int) == 1,
+      rxTimeSource: map['rx_time_source'] as String?,
       rawJson: map['raw_json'] as String,
       receivedAtApp: DateTime.parse(map['received_at_app'] as String),
       processed: (map['processed'] as int) == 1,
@@ -91,6 +111,10 @@ class AntennaInboxMessage {
       count: count,
       rxBootId: rxBootId,
       rxUptimeMs: rxUptimeMs,
+      rxUnixMs: rxUnixMs,
+      rxTime: rxTime,
+      rxTimeValid: rxTimeValid,
+      rxTimeSource: rxTimeSource,
       rawJson: rawJson,
       receivedAtApp: receivedAtApp,
       processed: processed ?? this.processed,
