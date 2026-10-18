@@ -6,7 +6,11 @@ enum TagSendStatus {
 }
 
 class TagRecord {
+  /// Stable SQLite primary key, used for safe row-specific edits.
+  final int? dbId;
   final String tagId;
+  /// Unique ESP queue message identifier, preserved across edits/exports.
+  final String? messageId;
   final String camelNo;
   final String camelName;
   final int batteryPercent;
@@ -26,7 +30,9 @@ class TagRecord {
   final double? accuracy;
 
   const TagRecord({
+    this.dbId,
     required this.tagId,
+    this.messageId,
     required this.camelNo,
     this.camelName = 'شتر ثبت‌نشده',
     required this.batteryPercent,
@@ -77,6 +83,7 @@ class TagRecord {
 
   TagRecord copyWith({
     String? tagId,
+    String? messageId,
     String? camelNo,
     String? camelName,
     int? batteryPercent,
@@ -94,7 +101,9 @@ class TagRecord {
     String? receivedDateTime,
   }) {
     return TagRecord(
+      dbId: dbId,
       tagId: tagId ?? this.tagId,
+      messageId: messageId ?? this.messageId,
       camelNo: camelNo ?? this.camelNo,
       camelName: camelName ?? this.camelName,
       batteryPercent: batteryPercent ?? this.batteryPercent,
@@ -116,6 +125,7 @@ class TagRecord {
   Map<String, dynamic> toJson() {
     return {
       'tagId': tagId,
+      'messageId': messageId,
       'camelNo': camelNo,
       'camelName': camelName,
       'batteryPercent': batteryPercent,
@@ -137,6 +147,7 @@ class TagRecord {
   factory TagRecord.fromJson(Map<String, dynamic> json) {
     return TagRecord(
       tagId: json['tagId'] ?? '',
+      messageId: json['messageId'] as String?,
       camelNo: json['camelNo'] ?? '-',
       camelName: json['camelName'] ?? 'شتر ثبت‌نشده',
       batteryPercent: json['batteryPercent'] ?? 0,

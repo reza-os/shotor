@@ -1,0 +1,246 @@
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -26,8 +26,9 @@
+ import 'models/zone_area.dart';
+ import 'models/app_alert.dart';
+ import 'models/antenna_payload.dart';
+ import 'services/local_storage_service.dart';
++import 'services/antenna_inbox_repair_service.dart';
+ import 'services/wifi_antenna_service.dart';
+ import 'services/alert_service.dart';
+ import 'models/app_settings.dart';
+ import 'services/app_setting_service.dart';
+@@ -779,8 +780,9 @@
+ 
+ 
+   late List<TagRecord> receivedRecords;
+ 
++  bool isRepairingInbox = false;
+   bool isAntennaConnected = false;
+   bool isAntennaConnecting = false;
+   String antennaStatus = 'قطع';
+   String lastAntennaJson = '-';
+@@ -1621,20 +1623,73 @@
+ 
+     await AlertService.addAlerts(alerts);
+   }
+ 
++  /// Only started by an explicit user confirmation after a read-only preview.
++  Future<void> repairOldEspHistory() async {
++    if (isRepairingInbox || isAntennaConnecting) return;
++    setState(() { isRepairingInbox = true; });
++    try {
++      // Do not run historical reconciliation while ESP is adding rows.
++      if (antennaService.isConnected || isAntennaConnected) {
++        await disconnectAntenna();
++      }
++      await _inboxProcessingTail;
++      final preview = await AntennaInboxRepairService.preview();
++      if (!mounted) return;
++      final accepted = await showDialog<bool>(
++        context: context,
++        builder: (dialogContext) => AlertDialog(
++          title: const Text('بازیابی سوابق ESP'),
++          content: SingleChildScrollView(
++            child: Text(
++              '${preview.summary}\n\n'
++              'این کار ابتدا رکوردهای قدیمی را با مشخصات دقیق وصل '
++              'می‌کند و فقط در صورت نبودن تطابق، رکورد جدید می‌سازد. '
++              'پیام‌های مبهم دست‌نخورده می‌مانند.\n\n'
++              'قبل از ادامه حتماً از دیتابیس گوشی نسخه پشتیبان داشته باشید. '
++              'برای پیام‌های بدون زمان معتبر، تاریخ نامشخص می‌ماند؛ '
++              'پیام‌های بدون GPS روی نقشه نمایش داده نمی‌شوند.',
++            ),
++          ),
++          actions: [
++            TextButton(onPressed: () => Navigator.pop(dialogContext, false),
++                child: const Text('انصراف')),
++            ElevatedButton(onPressed: () => Navigator.pop(dialogContext, true),
++                child: const Text('تأیید بازیابی')),
++          ],
++        ),
++      );
++      if (accepted != true || !mounted) return;
++      final report = await AntennaInboxRepairService.apply();
++      await loadReceivedRecords();
++      await AntennaInboxAudit.printReport();
++      if (!mounted) return;
++      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
++        content: Text('بازیابی پایان یافت؛ ${report.linkable} رکورد متصل، '
++            '${report.creatable} رکورد ساخته، ${report.ambiguous} مورد نامطمئن.'),
++        duration: const Duration(seconds: 8),
++      ));
++    } catch (error, stack) {
++      debugPrint('Inbox repair failed: $error\n$stack');
++      if (!mounted) return;
++      ScaffoldMessenger.of(context).showSnackBar(
++        SnackBar(content: Text('خطای بازیابی: $error')),
++      );
++    } finally {
++      if (mounted) setState(() { isRepairingInbox = false; });
++    }
++  }
++
+   Future<void> saveAllReceivedRecords() async {
++    // Records are committed to SQLite as they arrive. Never overwrite the
++    // database with this page's stale in-memory snapshot.
++    await loadReceivedRecords();
++    if (!mounted) return;
+     final todayRecords = getTodayRecords(receivedRecords);
+-
+-    await LocalStorageService.saveTagRecords(receivedRecords);
+-
+-    if (!mounted) return;
+-
+-    ScaffoldMessenger.of(context).showSnackBar(
+-      SnackBar(
+-        content: Text('${todayRecords.length} رکورد امروز در حافظه محلی ثبت شد.'),
+-      ),
+-    );
++    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
++      content: Text('${todayRecords.length} رکورد امروز در حافظه محلی موجود است.'),
++    ));
+   }
+ 
+   @override
+   Widget build(BuildContext context) {
+@@ -1830,8 +1885,22 @@
+                             ),
+                           ),
+                         ],
+                       ),
++                      const SizedBox(height: 10),
++                      SizedBox(
++                        width: double.infinity,
++                        child: OutlinedButton.icon(
++                          onPressed: isRepairingInbox ? null : repairOldEspHistory,
++                          icon: isRepairingInbox
++                              ? const SizedBox(width: 16, height: 16,
++                                  child: CircularProgressIndicator(strokeWidth: 2))
++                              : const Icon(Icons.restore_rounded),
++                          label: Text(isRepairingInbox
++                              ? 'در حال بررسی/بازیابی Inbox...'
++                              : 'بررسی و بازیابی سوابق ESP'),
++                        ),
++                      ),
+                     ],
+                   ),
+                 ),
+ 
+@@ -1909,8 +1978,27 @@
+                     ],
+                   ),
+                 ),
+ 
++                const SizedBox(height: 14),
++                Container(
++                  decoration: cardDecoration(),
++                  child: Column(
++                    children: [
++                      const SectionTitle(title: 'آخرین سوابق ذخیره‌شده (همه تاریخ‌ها)'),
++                      if (receivedRecords.isEmpty)
++                        const Padding(
++                          padding: EdgeInsets.all(16),
++                          child: Text('هنوز رکورد ذخیره‌شده‌ای وجود ندارد.'),
++                        )
++                      else
++                        ...receivedRecords.take(10).map(
++                          (record) => RecentTagRow(record: record),
++                        ),
++                    ],
++                  ),
++                ),
++
+                 const SizedBox(height: 16),
+ 
+                 SizedBox(
+                   width: double.infinity,
+@@ -1925,9 +2013,9 @@
+                     ),
+                     onPressed: saveAllReceivedRecords,
+                     icon: const Icon(Icons.download_rounded),
+                     label: Text(
+-                      'ثبت و ذخیره ${todayRecords.length} رکورد امروز',
++                      'بازخوانی ${todayRecords.length} رکورد امروز',
+                       style: const TextStyle(
+                         fontSize: 18,
+                         fontWeight: FontWeight.bold,
+                       ),
+@@ -2639,9 +2727,14 @@
+ 
+       return record;
+     }).toList();
+ 
+-    await LocalStorageService.saveTagRecords(updatedRecords);
++    final selectedIds = allRecords
++        .where((r) => isRecordInSelectedDate(r) &&
++            r.sendStatus == TagSendStatus.queued && r.dbId != null)
++        .map((r) => r.dbId!)
++        .toList();
++    await LocalStorageService.markSentByIds(selectedIds);
+ 
+     if (!mounted) return;
+ 
+     setState(() {
+@@ -6600,11 +6693,18 @@
+     final updatedRecords = records.where((item) {
+       return !identical(item, record);
+     }).toList();
+ 
+-    await LocalStorageService.saveTagRecords(updatedRecords);
+-
+-    if (!mounted) return;
++    final id = record.dbId;
++    if (id == null) {
++      if (!mounted) return;
++      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
++        content: Text('شناسه دیتابیس رکورد پیدا نشد؛ حذف انجام نشد.'),
++      ));
++      return;
++    }
++    final deleted = await LocalStorageService.deleteTagRecordById(id);
++    if (!deleted || !mounted) return;
+ 
+     setState(() {
+       records = updatedRecords;
+     });
+--- a/lib/screens/map_page.dart
++++ b/lib/screens/map_page.dart
+@@ -1128,12 +1128,12 @@
+            return isSameDay(parsed, now);
+          }).toList();
+        }
+ 
++       /// Historic positions remain visible even when no GPS was captured
++       /// today. Mark them as historical; do not represent as live positions.
+        List<TagRecord> get gpsRecords {
+-         final todayRecords = getTodayRecords(records);
+-
+-         return todayRecords.where(hasGps).toList();
++         return records.where(hasGps).toList();
+        }
+ 
+        List<TagRecord> get latestGpsRecordsByTag {
+          final result = <TagRecord>[];
+@@ -1208,13 +1208,20 @@
+                                onRefresh: loadRecords,
+                                child: ListView(
+                                  padding: const EdgeInsets.all(14),
+                                  children: [
++                                   const Padding(
++                                     padding: EdgeInsets.only(bottom: 10),
++                                     child: Text(
++                                       'موقعیت‌های نمایش‌داده‌شده تاریخی هستند و لزوماً محل فعلی شتر نیستند. پیام بدون مختصات GPS روی نقشه نمایش داده نمی‌شود.',
++                                       style: TextStyle(color: Colors.black54, fontSize: 12),
++                                     ),
++                                   ),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: MapSummaryCard(
+-                                           title: 'GPS امروز',
++                                           title: 'GPS ثبت‌شده',
+                                            value: allGpsCount.toString(),
+                                            icon: Icons.gps_fixed_rounded,
+                                            color: const Color(0xFF086EBB),
+                                          ),

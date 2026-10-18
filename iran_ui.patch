@@ -1,0 +1,288 @@
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -22,6 +22,7 @@
+ import 'data/mock_zones.dart';
+ import 'data/mock_alerts.dart';
+ import 'models/tag_record.dart';
++import 'utils/iran_time.dart';
+ import 'models/zone_area.dart';
+ import 'models/app_alert.dart';
+ import 'models/antenna_payload.dart';
+@@ -310,7 +311,7 @@
+ 
+     if (text.isEmpty) return null;
+ 
+-    return DateTime.tryParse(text);
++    return IranTime.parseForDisplay(text);
+   }
+ 
+   bool isSameDay(DateTime a, DateTime b) {
+@@ -318,7 +319,7 @@
+   }
+ 
+   List<TagRecord> getTodayRecords(List<TagRecord> source) {
+-    final now = DateTime.now();
++    final now = IranTime.nowWallClock();
+ 
+     return source.where((record) {
+       final parsed = recordDateTime(record);
+@@ -838,7 +839,7 @@
+ 
+     if (text.isEmpty) return null;
+ 
+-    return DateTime.tryParse(text);
++    return IranTime.parseForDisplay(text);
+   }
+ 
+   bool isSameDay(DateTime a, DateTime b) {
+@@ -846,7 +847,7 @@
+   }
+ 
+   List<TagRecord> getTodayRecords(List<TagRecord> source) {
+-    final now = DateTime.now();
++    final now = IranTime.nowWallClock();
+ 
+     return source.where((record) {
+       final parsed = recordDateTime(record);
+@@ -2277,7 +2278,7 @@
+   AppSettings appSettings = const AppSettings();
+ 
+   List<TagRecord> allRecords = [];
+-  DateTime selectedDate = DateTime.now();
++  DateTime selectedDate = IranTime.nowWallClock();
+ 
+   @override
+   void initState() {
+@@ -2492,7 +2493,7 @@
+       return null;
+     }
+ 
+-    return DateTime.tryParse(record.receivedDateTime);
++    return IranTime.parseForDisplay(record.receivedDateTime);
+   }
+ 
+   bool isSameDay(DateTime a, DateTime b) {
+@@ -2503,7 +2504,7 @@
+     final date = recordDate(record);
+ 
+     if (date == null) {
+-      return isSameDay(selectedDate, DateTime.now());
++      return false;
+     }
+ 
+     return isSameDay(date, selectedDate);
+@@ -2522,7 +2523,7 @@
+   }
+ 
+   bool get isToday {
+-    return isSameDay(selectedDate, DateTime.now());
++    return isSameDay(selectedDate, IranTime.nowWallClock());
+   }
+ 
+   void changeDay(int offset) {
+@@ -2533,7 +2534,7 @@
+ 
+   void goToToday() {
+     setState(() {
+-      selectedDate = DateTime.now();
++      selectedDate = IranTime.nowWallClock();
+     });
+   }
+ 
+@@ -2966,7 +2967,7 @@
+ bool isLoading = true;
+ bool isExportingExcel = false;
+ 
+-DateTime selectedDate = DateTime.now();
++DateTime selectedDate = IranTime.nowWallClock();
+ 
+ int slotMinutes = 60;
+ int maxGapMinutes = 30;
+@@ -3036,7 +3037,7 @@
+   }
+ 
+   bool get isToday {
+-    return isSameDay(selectedDate, DateTime.now());
++    return isSameDay(selectedDate, IranTime.nowWallClock());
+   }
+ 
+   void changeDay(int offset) {
+@@ -3049,7 +3050,7 @@
+ 
+   void goToToday() {
+     setState(() {
+-      selectedDate = DateTime.now();
++      selectedDate = IranTime.nowWallClock();
+     });
+ 
+     rebuildReport();
+@@ -6298,7 +6299,7 @@
+   String searchText = '';
+   RecordStatusFilter selectedStatusFilter = RecordStatusFilter.all;
+   RecordDateFilter selectedDateFilter = RecordDateFilter.all;
+-  DateTime selectedDate = DateTime.now();
++  DateTime selectedDate = IranTime.nowWallClock();
+ 
+   @override
+   void initState() {
+@@ -6322,7 +6323,7 @@
+       return null;
+     }
+ 
+-    return DateTime.tryParse(record.receivedDateTime);
++    return IranTime.parseForDisplay(record.receivedDateTime);
+   }
+ 
+   bool isSameDay(DateTime a, DateTime b) {
+@@ -6345,10 +6346,10 @@
+     }
+ 
+     if (date == null) {
+-      return selectedDateFilter == RecordDateFilter.today;
++      return selectedDateFilter == RecordDateFilter.all;
+     }
+ 
+-    final now = DateTime.now();
++    final now = IranTime.nowWallClock();
+     final yesterday = now.subtract(const Duration(days: 1));
+ 
+     switch (selectedDateFilter) {
+@@ -7147,7 +7148,7 @@
+       return null;
+     }
+ 
+-    return DateTime.tryParse(record.receivedDateTime);
++    return IranTime.parseForDisplay(record.receivedDateTime);
+   }
+ 
+   bool get hasGps {
+--- a/lib/screens/map_page.dart
++++ b/lib/screens/map_page.dart
+@@ -10,6 +10,7 @@
+      import '../models/geo_area.dart';
+      import '../models/polygon_zone.dart';
+      import '../models/tag_record.dart';
++     import '../utils/iran_time.dart';
+      import '../services/area_zone_service.dart';
+      import '../services/current_geo_area_service.dart';
+      import '../services/local_storage_service.dart';
+@@ -1109,7 +1110,7 @@
+ 
+          if (text.isEmpty) return null;
+ 
+-         return DateTime.tryParse(text);
++         return IranTime.parseForDisplay(text);
+        }
+ 
+        bool isSameDay(DateTime a, DateTime b) {
+@@ -1117,7 +1118,7 @@
+        }
+ 
+        List<TagRecord> getTodayRecords(List<TagRecord> source) {
+-         final now = DateTime.now();
++         final now = IranTime.nowWallClock();
+ 
+          return source.where((record) {
+            final parsed = recordDateTime(record);
+@@ -1153,7 +1154,7 @@
+        }
+ 
+        String recordDateText(TagRecord record) {
+-         final date = DateTime.tryParse(record.receivedDateTime);
++         final date = IranTime.parseForDisplay(record.receivedDateTime);
+ 
+          if (date == null) {
+            return record.receivedTime;
+@@ -3135,7 +3136,7 @@
+           return null;
+         }
+ 
+-        return DateTime.tryParse(text);
++        return IranTime.parseForDisplay(text);
+       }
+ 
+       void showRouteForRecord(TagRecord record) {
+@@ -3188,7 +3189,7 @@
+ 
+ 
+       String routePointTimeText(TagRecord record) {
+-        final parsed = DateTime.tryParse(record.receivedDateTime);
++        final parsed = IranTime.parseForDisplay(record.receivedDateTime);
+ 
+         if (parsed == null) {
+           return record.receivedTime;
+--- a/lib/services/sms_report_builder_service.dart
++++ b/lib/services/sms_report_builder_service.dart
+@@ -2,6 +2,7 @@
+ import '../models/camel_profile.dart';
+ import '../models/sms_report_settings.dart';
+ import '../models/tag_record.dart';
++import '../utils/iran_time.dart';
+ import 'area_zone_service.dart';
+ import 'camel_profile_service.dart';
+ import 'local_storage_service.dart';
+@@ -39,7 +40,7 @@
+ 
+     if (text.isEmpty) return null;
+ 
+-    return DateTime.tryParse(text);
++    return IranTime.parseForDisplay(text);
+   }
+ 
+   static bool isSameDay(DateTime a, DateTime b) {
+@@ -47,7 +48,7 @@
+   }
+ 
+   static List<TagRecord> todayRecords(List<TagRecord> records) {
+-    final now = DateTime.now();
++    final now = IranTime.nowWallClock();
+ 
+     return records.where((record) {
+       final parsed = recordDateTime(record);
+--- a/lib/services/live_herd_status_service.dart
++++ b/lib/services/live_herd_status_service.dart
+@@ -3,6 +3,7 @@
+ import '../models/live_herd_settings.dart';
+ import '../models/live_herd_status.dart';
+ import '../models/tag_record.dart';
++import '../utils/iran_time.dart';
+ import 'area_zone_service.dart';
+ import 'camel_profile_service.dart';
+ import 'local_storage_service.dart';
+@@ -15,7 +16,7 @@
+ 
+     if (text.isEmpty) return null;
+ 
+-    return DateTime.tryParse(text);
++    return IranTime.parseForDisplay(text);
+   }
+ 
+   static String twoDigit(int value) {
+@@ -31,7 +32,7 @@
+   static String agoText(DateTime? dateTime) {
+     if (dateTime == null) return 'دیده نشده';
+ 
+-    final diff = DateTime.now().difference(dateTime);
++    final diff = IranTime.nowWallClock().difference(dateTime);
+ 
+     if (diff.inMinutes < 1) {
+       return 'همین الان';
+--- a/lib/services/management_report_service.dart
++++ b/lib/services/management_report_service.dart
+@@ -2,6 +2,7 @@
+ import '../models/camel_profile.dart';
+ import '../models/management_report.dart';
+ import '../models/tag_record.dart';
++import '../utils/iran_time.dart';
+ import 'zone_check_service.dart';
+ 
+ class ManagementReportService {
+@@ -509,7 +510,7 @@
+     final rawDateTime = record.receivedDateTime.trim();
+ 
+     if (rawDateTime.isNotEmpty) {
+-      final parsed = DateTime.tryParse(rawDateTime);
++      final parsed = IranTime.parseForDisplay(rawDateTime);
+ 
+       if (parsed != null) {
+         return parsed;

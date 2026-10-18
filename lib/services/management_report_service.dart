@@ -2,6 +2,7 @@ import '../models/area_zone.dart';
 import '../models/camel_profile.dart';
 import '../models/management_report.dart';
 import '../models/tag_record.dart';
+import '../utils/iran_time.dart';
 import 'zone_check_service.dart';
 
 class ManagementReportService {
@@ -509,7 +510,7 @@ class ManagementReportService {
     final rawDateTime = record.receivedDateTime.trim();
 
     if (rawDateTime.isNotEmpty) {
-      final parsed = DateTime.tryParse(rawDateTime);
+      final parsed = IranTime.parseForDisplay(rawDateTime);
 
       if (parsed != null) {
         return parsed;

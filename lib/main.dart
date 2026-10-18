@@ -22,10 +22,12 @@ import 'data/mock_data.dart';
 import 'data/mock_zones.dart';
 import 'data/mock_alerts.dart';
 import 'models/tag_record.dart';
+import 'utils/iran_time.dart';
 import 'models/zone_area.dart';
 import 'models/app_alert.dart';
 import 'models/antenna_payload.dart';
 import 'services/local_storage_service.dart';
+import 'services/antenna_inbox_repair_service.dart';
 import 'services/wifi_antenna_service.dart';
 import 'services/alert_service.dart';
 import 'models/app_settings.dart';
@@ -54,9 +56,13 @@ import 'screens/geo_area_selection_page.dart';
 import 'services/antenna_wifi_connector.dart';
 
 import 'models/antenna_ws_frame.dart';
+import 'models/antenna_inbox_message.dart';
 import 'services/database_service.dart';
+import 'services/tag_records_events.dart';
 
 import 'services/antenna_receive_processor.dart';
+
+import 'services/antenna_inbox_audit.dart';
 
 
 
@@ -271,11 +277,20 @@ class _HomePageState extends State<HomePage> {
   List<TagRecord> records = [];
 
   Timer? homeRefreshTimer;
+  Timer? homeRecordsReloadTimer;
+
+  void _onRecordsChanged() {
+    if (homeRecordsReloadTimer?.isActive == true) return;
+    homeRecordsReloadTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted) unawaited(loadRecords());
+    });
+  }
 
   @override
   void initState() {
     super.initState();
 
+    TagRecordsEvents.revision.addListener(_onRecordsChanged);
     loadRecords();
 
     homeRefreshTimer = Timer.periodic(
@@ -290,6 +305,8 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    TagRecordsEvents.revision.removeListener(_onRecordsChanged);
+    homeRecordsReloadTimer?.cancel();
     homeRefreshTimer?.cancel();
     super.dispose();
   }
@@ -310,7 +327,7 @@ class _HomePageState extends State<HomePage> {
 
     if (text.isEmpty) return null;
 
-    return DateTime.tryParse(text);
+    return IranTime.parseForDisplay(text);
   }
 
   bool isSameDay(DateTime a, DateTime b) {
@@ -318,7 +335,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   List<TagRecord> getTodayRecords(List<TagRecord> source) {
-    final now = DateTime.now();
+    final now = IranTime.nowWallClock();
 
     return source.where((record) {
       final parsed = recordDateTime(record);
@@ -768,11 +785,18 @@ class _ReceivePageState extends State<ReceivePage>
 
   int antennaConnectionGeneration = 0;
 
+  // One database-backed Inbox worker. Incoming WebSocket frames schedule a
+  // scan rather than accumulating one Future per packet in memory.
+  Future<void>? _inboxDrainFuture;
+  bool _inboxDrainRequested = false;
+  int _inboxUiPending = 0;
+
 
 
 
   late List<TagRecord> receivedRecords;
 
+  bool isRepairingInbox = false;
   bool isAntennaConnected = false;
   bool isAntennaConnecting = false;
   String antennaStatus = 'قطع';
@@ -786,8 +810,7 @@ class _ReceivePageState extends State<ReceivePage>
     super.initState();
 
     receivedRecords = [];
-    loadReceivedRecords();
-    loadAppSettings();
+    unawaited(_loadAndRecoverInbox());
 
     receiveRefreshTimer = Timer.periodic(
       const Duration(minutes: 1),
@@ -812,6 +835,18 @@ class _ReceivePageState extends State<ReceivePage>
 
    super.dispose();
  }
+
+  /// Read existing app data first, then replay committed but unfinished Inbox.
+  Future<void> _loadAndRecoverInbox() async {
+    try {
+      await loadAppSettings();
+      await loadReceivedRecords();
+      // Replays only unprocessed rows. No ESP connection or phone GPS needed.
+      await _scheduleInboxDrain();
+    } catch (error, stack) {
+      debugPrint('Inbox recovery error: $error\n$stack');
+    }
+  }
 
   Future<void> loadReceivedRecords() async {
     final loadedRecords = await LocalStorageService.loadTagRecords();
@@ -838,7 +873,7 @@ class _ReceivePageState extends State<ReceivePage>
 
     if (text.isEmpty) return null;
 
-    return DateTime.tryParse(text);
+    return IranTime.parseForDisplay(text);
   }
 
   bool isSameDay(DateTime a, DateTime b) {
@@ -846,7 +881,7 @@ class _ReceivePageState extends State<ReceivePage>
   }
 
   List<TagRecord> getTodayRecords(List<TagRecord> source) {
-    final now = DateTime.now();
+    final now = IranTime.nowWallClock();
 
     return source.where((record) {
       final parsed = recordDateTime(record);
@@ -875,14 +910,13 @@ class _ReceivePageState extends State<ReceivePage>
 
     try {
       await antennaSubscription?.cancel();
+      final generationForConnection = ++antennaConnectionGeneration;
 
    antennaSubscription = antennaService.jsonStream.listen(
      (jsonText) async {
-       final generation = antennaConnectionGeneration;
-
        await handleAntennaWebSocketText(
          jsonText,
-         generation,
+         generationForConnection,
        );
      },
         onError: (error) {
@@ -952,8 +986,6 @@ class _ReceivePageState extends State<ReceivePage>
   await antennaService.connect(
     url: appSettings.wifiWebSocketUrl,
   );
-
-  antennaConnectionGeneration++;
 
   setState(() {
     antennaStatus = 'در حال ارسال ساعت گوشی به ESP...';
@@ -1030,6 +1062,7 @@ class _ReceivePageState extends State<ReceivePage>
   }
 
  Future<void> disconnectAntenna() async {
+   antennaConnectionGeneration++;
    allowAntennaReconnect = false;
    cancelAntennaReconnect();
 
@@ -1100,30 +1133,16 @@ class _ReceivePageState extends State<ReceivePage>
      final frame = AntennaWsFrame.parse(jsonText);
 
     if (frame.isControlMessage) {
+      // Late callback from a previous socket must not control the new socket.
+      if (generation != antennaConnectionGeneration) return;
       await handleAntennaControlFrame(frame);
       return;
     }
 
 
 
-    if (!frame.isControlMessage &&
-        frame.messageId == null &&
-        frame.password != null &&
-        frame.state != null &&
-        frame.lock != null &&
-        frame.counterLock != null &&
-        frame.batteryPercent != null &&
-        frame.count != null) {
-      await processJsonText(
-        jsonText,
-        locationName: appSettings.defaultLocationName,
-        showSnackBar: false,
-      );
-
-      return;
-    }
-
-
+    // WebSocket transport requires a durable MessageId. The manual JSON
+    // button is the only supported path for legacy frames without an ID.
 
      if (!frame.isDataMessage || !frame.hasRequiredDataFields) {
        await AntennaLogService.addLog(
@@ -1140,50 +1159,27 @@ class _ReceivePageState extends State<ReceivePage>
      final inserted = await DatabaseService.insertAntennaInboxMessage(
        inboxMessage,
      );
-
-     if (generation != antennaConnectionGeneration) {
-       return;
+     if (!inserted &&
+         !await DatabaseService.antennaInboxDataMatches(inboxMessage)) {
+       // A reused MessageId with different data is a protocol error, not an
+       // ordinary retransmission; never ACK it as if safely delivered.
+       throw StateError('ESP MessageId collision or invalid Inbox insert');
      }
 
-     if (!antennaService.isConnected) {
-       return;
+     // ACK on the delivering socket after the durable Inbox insert, without
+     // waiting for profile lookups, phone location, UI or TagRecord processing.
+     if (generation == antennaConnectionGeneration &&
+         antennaService.isConnected) {
+       try {
+         await antennaService.ack(inboxMessage.messageId);
+       } catch (error) {
+         debugPrint('ACK failed (ESP will resend): $error');
+       }
      }
 
-     await antennaService.ack(inboxMessage.messageId);
-
-     if (!inserted) {
-       await AntennaLogService.addLog(
-         type: AntennaLogType.info,
-         title: 'پیام تکراری ESP تأیید شد',
-         message: inboxMessage.messageId,
-       );
-
-       return;
-     }
-
-     try {
-       await processJsonText(
-         jsonText,
-         locationName: appSettings.defaultLocationName,
-         showSnackBar: false,
-         skipDuplicateCheck: true,
-       );
-
-       await DatabaseService.markAntennaInboxMessageProcessed(
-         inboxMessage.messageId,
-       );
-     } catch (e) {
-       await DatabaseService.markAntennaInboxMessageError(
-         inboxMessage.messageId,
-         e,
-       );
-
-       await AntennaLogService.addLog(
-         type: AntennaLogType.error,
-         title: 'خطا در پردازش پیام ذخیره‌شده ESP',
-         message: e.toString(),
-       );
-     }
+     // Process from SQLite in one bounded worker; a crash before this call
+     // is still recoverable on next launch because Inbox already committed.
+     unawaited(_scheduleInboxDrain());
    } catch (e) {
      await AntennaLogService.addLog(
        type: AntennaLogType.error,
@@ -1198,6 +1194,118 @@ class _ReceivePageState extends State<ReceivePage>
      });
    }
  }
+
+  Future<void> _scheduleInboxDrain() {
+    _inboxDrainRequested = true;
+    final current = _inboxDrainFuture;
+    if (current != null) return current;
+
+    final job = _runInboxDrain();
+    _inboxDrainFuture = job;
+    unawaited(job.whenComplete(() {
+      _inboxDrainFuture = null;
+      // An arrival can race the final empty database read. Preserve wakeups.
+      if (_inboxDrainRequested && mounted) {
+        unawaited(_scheduleInboxDrain());
+      }
+    }));
+    return job;
+  }
+
+  Future<void> _runInboxDrain() async {
+    try {
+      do {
+        _inboxDrainRequested = false;
+        var afterRowId = 0;
+        while (mounted) {
+          final batch = await DatabaseService.getPendingInboxBatch(
+            afterRowId: afterRowId,
+            limit: 50,
+          );
+          if (batch.isEmpty) break;
+          for (final entry in batch) {
+            if (!mounted) break;
+            afterRowId = entry.rowId;
+            // A failed record remains pending, but the rowid cursor allows
+            // subsequent messages to progress instead of blocking the queue.
+            await _processInboxMessage(entry.message);
+          }
+        }
+      } while (mounted && _inboxDrainRequested);
+    } catch (error, stack) {
+      debugPrint('Inbox drain stopped: $error\n$stack');
+      // Pending rows remain stored and will be retried on next app launch.
+    } finally {
+      if (mounted && _inboxUiPending > 0) {
+        _inboxUiPending = 0;
+        setState(() {});
+      }
+    }
+  }
+
+  Future<void> _processInboxMessage(AntennaInboxMessage message) async {
+    try {
+      if (await DatabaseService.isAntennaInboxMessageProcessed(
+        message.messageId,
+      )) {
+        return;
+      }
+
+      var didInsertRecord = false;
+      final result = await receiveProcessor.processJsonText(
+        jsonText: message.rawJson,
+        locationName: appSettings.defaultLocationName,
+        skipDuplicateCheck: true,
+        capturePhoneLocation: false,
+        persistRecord: (record) async {
+          didInsertRecord = await DatabaseService.commitInboxTagRecord(
+            messageId: message.messageId,
+            record: record,
+          );
+        },
+      );
+
+      if (!result.isSaved || result.record == null) {
+        throw StateError('Inbox record was not saved: ${result.message}');
+      }
+
+      if (didInsertRecord && mounted) {
+        receivedRecords.insert(0, result.record!);
+        lastAntennaJson = message.rawJson;
+        _inboxUiPending++;
+        // Rebuild at most once per 25 records, rather than on every queued
+        // frame. Flush the final partial batch in _runInboxDrain.finally.
+        if (_inboxUiPending >= 25) {
+          _inboxUiPending = 0;
+          setState(() {
+            jsonController.text = message.rawJson;
+            if (isAntennaConnected) {
+              antennaStatus = 'دریافت شد: ${result.tagId}';
+            }
+          });
+        }
+      }
+    } catch (error, stack) {
+      try {
+        if (!await DatabaseService.isAntennaInboxMessageProcessed(
+          message.messageId,
+        )) {
+          await DatabaseService.markAntennaInboxMessageError(
+            message.messageId,
+            error,
+          );
+        }
+        await AntennaLogService.addLog(
+          type: AntennaLogType.error,
+          title: 'خطای پردازش Inbox ESP',
+          message: '${message.messageId}: $error',
+        );
+      } catch (loggingError) {
+        debugPrint('Could not save inbox error: $loggingError');
+      }
+      debugPrint('Inbox processing failed: $error\n$stack');
+    }
+  }
 
 Future<void> handleAntennaControlFrame(AntennaWsFrame frame) async {
   if (!mounted) return;
@@ -1550,18 +1658,72 @@ Future<void> processJsonText(
     await AlertService.addAlerts(alerts);
   }
 
+  /// Only started by an explicit user confirmation after a read-only preview.
+  Future<void> repairOldEspHistory() async {
+    if (isRepairingInbox || isAntennaConnecting) return;
+    setState(() { isRepairingInbox = true; });
+    try {
+      // Do not run historical reconciliation while ESP is adding rows.
+      if (antennaService.isConnected || isAntennaConnected) {
+        await disconnectAntenna();
+      }
+      final draining = _inboxDrainFuture;
+      if (draining != null) await draining;
+      final preview = await AntennaInboxRepairService.preview();
+      if (!mounted) return;
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('بازیابی سوابق ESP'),
+          content: SingleChildScrollView(
+            child: Text(
+              '${preview.summary}\n\n'
+              'این کار ابتدا رکوردهای قدیمی را با مشخصات دقیق وصل '
+              'می‌کند و فقط در صورت نبودن تطابق، رکورد جدید می‌سازد. '
+              'پیام‌های مبهم دست‌نخورده می‌مانند.\n\n'
+              'قبل از ادامه حتماً از دیتابیس گوشی نسخه پشتیبان داشته باشید. '
+              'برای پیام‌های بدون زمان معتبر، تاریخ نامشخص می‌ماند؛ '
+              'پیام‌های بدون GPS روی نقشه نمایش داده نمی‌شوند.',
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('انصراف')),
+            ElevatedButton(onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('تأیید بازیابی')),
+          ],
+        ),
+      );
+      if (accepted != true || !mounted) return;
+      final report = await AntennaInboxRepairService.apply();
+      await loadReceivedRecords();
+      await AntennaInboxAudit.printReport();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('بازیابی پایان یافت؛ ${report.linkable} رکورد متصل، '
+            '${report.creatable} رکورد ساخته، ${report.ambiguous} مورد نامطمئن.'),
+        duration: const Duration(seconds: 8),
+      ));
+    } catch (error, stack) {
+      debugPrint('Inbox repair failed: $error\n$stack');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('خطای بازیابی: $error')),
+      );
+    } finally {
+      if (mounted) setState(() { isRepairingInbox = false; });
+    }
+  }
+
   Future<void> saveAllReceivedRecords() async {
-    final todayRecords = getTodayRecords(receivedRecords);
-
-    await LocalStorageService.saveTagRecords(receivedRecords);
-
+    // Records are committed to SQLite as they arrive. Never overwrite the
+    // database with this page's stale in-memory snapshot.
+    await loadReceivedRecords();
     if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${todayRecords.length} رکورد امروز در حافظه محلی ثبت شد.'),
-      ),
-    );
+    final todayRecords = getTodayRecords(receivedRecords);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('${todayRecords.length} رکورد امروز در حافظه محلی موجود است.'),
+    ));
   }
 
   @override
@@ -1759,6 +1921,20 @@ Future<void> processJsonText(
                           ),
                         ],
                       ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: isRepairingInbox ? null : repairOldEspHistory,
+                          icon: isRepairingInbox
+                              ? const SizedBox(width: 16, height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.restore_rounded),
+                          label: Text(isRepairingInbox
+                              ? 'در حال بررسی/بازیابی Inbox...'
+                              : 'بررسی و بازیابی سوابق ESP'),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -1838,6 +2014,25 @@ Future<void> processJsonText(
                   ),
                 ),
 
+                const SizedBox(height: 14),
+                Container(
+                  decoration: cardDecoration(),
+                  child: Column(
+                    children: [
+                      const SectionTitle(title: 'آخرین سوابق ذخیره‌شده (همه تاریخ‌ها)'),
+                      if (receivedRecords.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text('هنوز رکورد ذخیره‌شده‌ای وجود ندارد.'),
+                        )
+                      else
+                        ...receivedRecords.take(10).map(
+                          (record) => RecentTagRow(record: record),
+                        ),
+                    ],
+                  ),
+                ),
+
                 const SizedBox(height: 16),
 
                 SizedBox(
@@ -1854,7 +2049,7 @@ Future<void> processJsonText(
                     onPressed: saveAllReceivedRecords,
                     icon: const Icon(Icons.download_rounded),
                     label: Text(
-                      'ثبت و ذخیره ${todayRecords.length} رکورد امروز',
+                      'بازخوانی ${todayRecords.length} رکورد امروز',
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -2277,7 +2472,7 @@ class _ReportPageState extends State<ReportPage> {
   AppSettings appSettings = const AppSettings();
 
   List<TagRecord> allRecords = [];
-  DateTime selectedDate = DateTime.now();
+  DateTime selectedDate = IranTime.nowWallClock();
 
   @override
   void initState() {
@@ -2492,7 +2687,7 @@ Future<void> createSystemJson() async {
       return null;
     }
 
-    return DateTime.tryParse(record.receivedDateTime);
+    return IranTime.parseForDisplay(record.receivedDateTime);
   }
 
   bool isSameDay(DateTime a, DateTime b) {
@@ -2503,7 +2698,7 @@ Future<void> createSystemJson() async {
     final date = recordDate(record);
 
     if (date == null) {
-      return isSameDay(selectedDate, DateTime.now());
+      return false;
     }
 
     return isSameDay(date, selectedDate);
@@ -2522,7 +2717,7 @@ Future<void> createSystemJson() async {
   }
 
   bool get isToday {
-    return isSameDay(selectedDate, DateTime.now());
+    return isSameDay(selectedDate, IranTime.nowWallClock());
   }
 
   void changeDay(int offset) {
@@ -2533,7 +2728,7 @@ Future<void> createSystemJson() async {
 
   void goToToday() {
     setState(() {
-      selectedDate = DateTime.now();
+      selectedDate = IranTime.nowWallClock();
     });
   }
 
@@ -2568,7 +2763,12 @@ Future<void> createSystemJson() async {
       return record;
     }).toList();
 
-    await LocalStorageService.saveTagRecords(updatedRecords);
+    final selectedIds = allRecords
+        .where((r) => isRecordInSelectedDate(r) &&
+            r.sendStatus == TagSendStatus.queued && r.dbId != null)
+        .map((r) => r.dbId!)
+        .toList();
+    await LocalStorageService.markSentByIds(selectedIds);
 
     if (!mounted) return;
 
@@ -2966,7 +3166,7 @@ class _ManagementReportPageState extends State<ManagementReportPage> {
 bool isLoading = true;
 bool isExportingExcel = false;
 
-DateTime selectedDate = DateTime.now();
+DateTime selectedDate = IranTime.nowWallClock();
 
 int slotMinutes = 60;
 int maxGapMinutes = 30;
@@ -3036,7 +3236,7 @@ ManagementReport? report;
   }
 
   bool get isToday {
-    return isSameDay(selectedDate, DateTime.now());
+    return isSameDay(selectedDate, IranTime.nowWallClock());
   }
 
   void changeDay(int offset) {
@@ -3049,7 +3249,7 @@ ManagementReport? report;
 
   void goToToday() {
     setState(() {
-      selectedDate = DateTime.now();
+      selectedDate = IranTime.nowWallClock();
     });
 
     rebuildReport();
@@ -6294,15 +6494,31 @@ class RecordsHistoryPage extends StatefulWidget {
 class _RecordsHistoryPageState extends State<RecordsHistoryPage> {
   bool isLoading = true;
   List<TagRecord> records = [];
+  Timer? _recordsReloadTimer;
+
+  void _onRecordsChanged() {
+    if (_recordsReloadTimer?.isActive == true) return;
+    _recordsReloadTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted) unawaited(loadRecords());
+    });
+  }
+
+  @override
+  void dispose() {
+    TagRecordsEvents.revision.removeListener(_onRecordsChanged);
+    _recordsReloadTimer?.cancel();
+    super.dispose();
+  }
 
   String searchText = '';
   RecordStatusFilter selectedStatusFilter = RecordStatusFilter.all;
   RecordDateFilter selectedDateFilter = RecordDateFilter.all;
-  DateTime selectedDate = DateTime.now();
+  DateTime selectedDate = IranTime.nowWallClock();
 
   @override
   void initState() {
     super.initState();
+    TagRecordsEvents.revision.addListener(_onRecordsChanged);
     loadRecords();
   }
 
@@ -6322,7 +6538,7 @@ class _RecordsHistoryPageState extends State<RecordsHistoryPage> {
       return null;
     }
 
-    return DateTime.tryParse(record.receivedDateTime);
+    return IranTime.parseForDisplay(record.receivedDateTime);
   }
 
   bool isSameDay(DateTime a, DateTime b) {
@@ -6345,10 +6561,10 @@ class _RecordsHistoryPageState extends State<RecordsHistoryPage> {
     }
 
     if (date == null) {
-      return selectedDateFilter == RecordDateFilter.today;
+      return selectedDateFilter == RecordDateFilter.all;
     }
 
-    final now = DateTime.now();
+    final now = IranTime.nowWallClock();
     final yesterday = now.subtract(const Duration(days: 1));
 
     switch (selectedDateFilter) {
@@ -6529,9 +6745,16 @@ class _RecordsHistoryPageState extends State<RecordsHistoryPage> {
       return !identical(item, record);
     }).toList();
 
-    await LocalStorageService.saveTagRecords(updatedRecords);
-
-    if (!mounted) return;
+    final id = record.dbId;
+    if (id == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('شناسه دیتابیس رکورد پیدا نشد؛ حذف انجام نشد.'),
+      ));
+      return;
+    }
+    final deleted = await LocalStorageService.deleteTagRecordById(id);
+    if (!deleted || !mounted) return;
 
     setState(() {
       records = updatedRecords;
@@ -7147,7 +7370,7 @@ class RecordHistoryCard extends StatelessWidget {
       return null;
     }
 
-    return DateTime.tryParse(record.receivedDateTime);
+    return IranTime.parseForDisplay(record.receivedDateTime);
   }
 
   bool get hasGps {

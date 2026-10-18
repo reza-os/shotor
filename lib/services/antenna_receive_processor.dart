@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import '../models/antenna_payload.dart';
 import '../models/app_alert.dart';
 import '../models/tag_record.dart';
@@ -55,6 +57,9 @@ class AntennaReceiveProcessor {
     required String jsonText,
     required String locationName,
     bool skipDuplicateCheck = false,
+    // Queued ESP packets describe a past event; phone GPS is not its location.
+    bool capturePhoneLocation = true,
+    Future<void> Function(TagRecord record)? persistRecord,
     void Function()? onLocationStarted,
     void Function(AppLocationResult result)? onLocationFinished,
   }) async {
@@ -83,46 +88,73 @@ class AntennaReceiveProcessor {
         }
       }
 
-      final camelProfile = await CamelProfileService.getOrCreateProfile(tagId);
-
-      onLocationStarted?.call();
-
-      final locationResult = await LocationService.getCurrentLocation();
-
-      onLocationFinished?.call(locationResult);
-
-      String finalLocationName = locationName;
-
-      if (locationResult.success) {
-        finalLocationName = '$locationName + GPS گوشی';
-      } else {
-        finalLocationName = '$locationName بدون GPS';
-
-        await AntennaLogService.addLog(
-          type: AntennaLogType.info,
-          title: 'GPS ثبت نشد',
-          message: locationResult.message,
+      // Profile metadata must not be a prerequisite for durable event storage.
+      var camelNo = '-';
+      var camelName = 'شتر ثبت‌نشده';
+      try {
+        final profile = await CamelProfileService.getOrCreateProfile(tagId);
+        camelNo = profile.camelNo;
+        camelName = profile.camelName;
+      } catch (error, stack) {
+        developer.log(
+          'Profile lookup failed, saving antenna record without profile: $error',
+          name: 'saraban.antenna',
+          error: error,
+          stackTrace: stack,
         );
+      }
+
+      AppLocationResult? locationResult;
+      var finalLocationName = locationName;
+
+      if (capturePhoneLocation) {
+        // Used only by explicit/manual input. Never used for the ESP backlog.
+        onLocationStarted?.call();
+        locationResult = await LocationService.getCurrentLocation();
+        onLocationFinished?.call(locationResult);
+        if (locationResult.success) {
+          finalLocationName = '$locationName + GPS گوشی';
+        } else {
+          finalLocationName = '$locationName بدون GPS';
+        }
+      } else {
+        // There is no GPS coordinate in the ESP NRF24 frame. A later phone
+        // location must not be presented as the camel position at event time.
+        finalLocationName = '$locationName (موقعیت رویداد نامشخص)';
       }
 
       final record = payload.toTagRecord(
         locationName: finalLocationName,
-        camelNo: camelProfile.camelNo,
-        camelName: camelProfile.camelName,
-        latitude: locationResult.latitude,
-        longitude: locationResult.longitude,
-        accuracy: locationResult.accuracy,
+        camelNo: camelNo,
+        camelName: camelName,
+        latitude: locationResult?.latitude,
+        longitude: locationResult?.longitude,
+        accuracy: locationResult?.accuracy,
       );
 
-      await LocalStorageService.addTagRecord(record);
+      if (persistRecord == null) {
+        await LocalStorageService.addTagRecord(record);
+      } else {
+        await persistRecord(record);
+      }
 
-      await AntennaLogService.addLog(
-        type: AntennaLogType.received,
-        title: 'رکورد جدید ذخیره شد',
-        message: '${record.camelName} / ${record.tagId} / ${record.batteryText}',
-      );
-
-      await _createAlertsForRecord(record);
+      // Best-effort post-commit effects. A log/alert failure must never turn
+      // an already committed TagRecord into an "unprocessed" inbox message.
+      try {
+        await AntennaLogService.addLog(
+          type: AntennaLogType.received,
+          title: 'رکورد جدید ذخیره شد',
+          message: '${record.camelName} / ${record.tagId} / ${record.batteryText}',
+        );
+        await _createAlertsForRecord(record);
+      } catch (error, stack) {
+        developer.log(
+          'Post-save antenna effects failed: $error',
+          name: 'saraban.antenna',
+          error: error,
+          stackTrace: stack,
+        );
+      }
 
       return AntennaProcessResult(
         type: AntennaProcessResultType.saved,
@@ -204,9 +236,7 @@ class AntennaReceiveProcessor {
 
   static Future<void> _createAlertsForRecord(TagRecord record) async {
     final now = DateTime.now();
-    final hour = now.hour.toString().padLeft(2, '0');
-    final minute = now.minute.toString().padLeft(2, '0');
-    final time = '$hour:$minute';
+    final time = record.receivedTime;
 
     final alerts = <AppAlert>[];
 

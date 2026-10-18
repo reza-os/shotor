@@ -2,6 +2,7 @@ import '../models/area_zone.dart';
 import '../models/camel_profile.dart';
 import '../models/sms_report_settings.dart';
 import '../models/tag_record.dart';
+import '../utils/iran_time.dart';
 import 'area_zone_service.dart';
 import 'camel_profile_service.dart';
 import 'local_storage_service.dart';
@@ -39,7 +40,7 @@ class SmsReportBuilderService {
 
     if (text.isEmpty) return null;
 
-    return DateTime.tryParse(text);
+    return IranTime.parseForDisplay(text);
   }
 
   static bool isSameDay(DateTime a, DateTime b) {
@@ -47,7 +48,7 @@ class SmsReportBuilderService {
   }
 
   static List<TagRecord> todayRecords(List<TagRecord> records) {
-    final now = DateTime.now();
+    final now = IranTime.nowWallClock();
 
     return records.where((record) {
       final parsed = recordDateTime(record);

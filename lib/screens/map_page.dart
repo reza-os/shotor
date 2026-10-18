@@ -10,9 +10,11 @@ import 'dart:async';
      import '../models/geo_area.dart';
      import '../models/polygon_zone.dart';
      import '../models/tag_record.dart';
+     import '../utils/iran_time.dart';
      import '../services/area_zone_service.dart';
      import '../services/current_geo_area_service.dart';
      import '../services/local_storage_service.dart';
+     import '../services/tag_records_events.dart';
      import '../services/location_service.dart';
      import '../services/polygon_zone_service.dart';
      import '../services/zone_check_service.dart';
@@ -127,12 +129,21 @@ import 'dart:async';
        List<PolygonZone> polygonZones = [];
 
        Timer? mapRefreshTimer;
+       Timer? mapRecordsReloadTimer;
        GeoArea? currentArea;
+
+       void _onRecordsChanged() {
+         if (mapRecordsReloadTimer?.isActive == true) return;
+         mapRecordsReloadTimer = Timer(const Duration(seconds: 1), () {
+           if (mounted) unawaited(loadRecords());
+         });
+       }
 
        @override
        void initState() {
          super.initState();
 
+         TagRecordsEvents.revision.addListener(_onRecordsChanged);
          loadRecords();
          loadCurrentArea();
          loadPolygonZones();
@@ -148,6 +159,8 @@ import 'dart:async';
 
        @override
        void dispose() {
+         TagRecordsEvents.revision.removeListener(_onRecordsChanged);
+         mapRecordsReloadTimer?.cancel();
          mapRefreshTimer?.cancel();
          super.dispose();
        }
@@ -1109,7 +1122,7 @@ import 'dart:async';
 
          if (text.isEmpty) return null;
 
-         return DateTime.tryParse(text);
+         return IranTime.parseForDisplay(text);
        }
 
        bool isSameDay(DateTime a, DateTime b) {
@@ -1117,7 +1130,7 @@ import 'dart:async';
        }
 
        List<TagRecord> getTodayRecords(List<TagRecord> source) {
-         final now = DateTime.now();
+         final now = IranTime.nowWallClock();
 
          return source.where((record) {
            final parsed = recordDateTime(record);
@@ -1128,10 +1141,10 @@ import 'dart:async';
          }).toList();
        }
 
+       /// Historic positions remain visible even when no GPS was captured
+       /// today. Mark them as historical; do not represent as live positions.
        List<TagRecord> get gpsRecords {
-         final todayRecords = getTodayRecords(records);
-
-         return todayRecords.where(hasGps).toList();
+         return records.where(hasGps).toList();
        }
 
        List<TagRecord> get latestGpsRecordsByTag {
@@ -1153,7 +1166,7 @@ import 'dart:async';
        }
 
        String recordDateText(TagRecord record) {
-         final date = DateTime.tryParse(record.receivedDateTime);
+         final date = IranTime.parseForDisplay(record.receivedDateTime);
 
          if (date == null) {
            return record.receivedTime;
@@ -1208,11 +1221,18 @@ import 'dart:async';
                                child: ListView(
                                  padding: const EdgeInsets.all(14),
                                  children: [
+                                   const Padding(
+                                     padding: EdgeInsets.only(bottom: 10),
+                                     child: Text(
+                                       'موقعیت‌های نمایش‌داده‌شده تاریخی هستند و لزوماً محل فعلی شتر نیستند. پیام بدون مختصات GPS روی نقشه نمایش داده نمی‌شود.',
+                                       style: TextStyle(color: Colors.black54, fontSize: 12),
+                                     ),
+                                   ),
                                    Row(
                                      children: [
                                        Expanded(
                                          child: MapSummaryCard(
-                                           title: 'GPS امروز',
+                                           title: 'GPS ثبت‌شده',
                                            value: allGpsCount.toString(),
                                            icon: Icons.gps_fixed_rounded,
                                            color: const Color(0xFF086EBB),
@@ -3135,7 +3155,7 @@ double zoneScaleForRecord(TagRecord record) {
           return null;
         }
 
-        return DateTime.tryParse(text);
+        return IranTime.parseForDisplay(text);
       }
 
       void showRouteForRecord(TagRecord record) {
@@ -3188,7 +3208,7 @@ double zoneScaleForRecord(TagRecord record) {
 
 
       String routePointTimeText(TagRecord record) {
-        final parsed = DateTime.tryParse(record.receivedDateTime);
+        final parsed = IranTime.parseForDisplay(record.receivedDateTime);
 
         if (parsed == null) {
           return record.receivedTime;

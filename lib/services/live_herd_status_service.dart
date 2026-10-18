@@ -3,6 +3,7 @@ import '../models/camel_profile.dart';
 import '../models/live_herd_settings.dart';
 import '../models/live_herd_status.dart';
 import '../models/tag_record.dart';
+import '../utils/iran_time.dart';
 import 'area_zone_service.dart';
 import 'camel_profile_service.dart';
 import 'local_storage_service.dart';
@@ -15,7 +16,7 @@ class LiveHerdStatusService {
 
     if (text.isEmpty) return null;
 
-    return DateTime.tryParse(text);
+    return IranTime.parseForDisplay(text);
   }
 
   static String twoDigit(int value) {
@@ -31,7 +32,7 @@ class LiveHerdStatusService {
   static String agoText(DateTime? dateTime) {
     if (dateTime == null) return 'دیده نشده';
 
-    final diff = DateTime.now().difference(dateTime);
+    final diff = IranTime.nowWallClock().difference(dateTime);
 
     if (diff.inMinutes < 1) {
       return 'همین الان';
