@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'map_data_events.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -46,6 +47,7 @@ class PolygonZoneService {
       _key,
       jsonText,
     );
+    MapDataEvents.changed();
   }
 
   static Future<void> addZone(
@@ -116,6 +118,7 @@ class PolygonZoneService {
     final prefs = await SharedPreferences.getInstance();
 
     await prefs.remove(_key);
+    MapDataEvents.changed();
   }
 
   static String createId() {

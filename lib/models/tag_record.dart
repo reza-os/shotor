@@ -28,6 +28,9 @@ class TagRecord {
   final double? latitude;
   final double? longitude;
   final double? accuracy;
+  /// phone = GPS receiver phone at arrival, device = GPS in antenna payload.
+  final String? gpsSource;
+  final String? gpsCapturedAt;
 
   const TagRecord({
     this.dbId,
@@ -48,6 +51,8 @@ class TagRecord {
     this.latitude,
     this.longitude,
     this.accuracy,
+    this.gpsSource,
+    this.gpsCapturedAt,
   });
 
   bool get isBatteryLow => batteryPercent <= 30;
@@ -98,6 +103,8 @@ class TagRecord {
     double? latitude,
     double? longitude,
     double? accuracy,
+    String? gpsSource,
+    String? gpsCapturedAt,
     String? receivedDateTime,
   }) {
     return TagRecord(
@@ -118,6 +125,8 @@ class TagRecord {
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       accuracy: accuracy ?? this.accuracy,
+      gpsSource: gpsSource ?? this.gpsSource,
+      gpsCapturedAt: gpsCapturedAt ?? this.gpsCapturedAt,
       receivedDateTime: receivedDateTime ?? this.receivedDateTime,
     );
   }
@@ -140,6 +149,8 @@ class TagRecord {
       'latitude': latitude,
       'longitude': longitude,
       'accuracy': accuracy,
+      'gpsSource': gpsSource,
+      'gpsCapturedAt': gpsCapturedAt,
       'receivedDateTime': receivedDateTime,
     };
   }
@@ -166,6 +177,8 @@ class TagRecord {
       latitude: (json['latitude'] as num?)?.toDouble(),
       longitude: (json['longitude'] as num?)?.toDouble(),
       accuracy: (json['accuracy'] as num?)?.toDouble(),
+      gpsSource: json['gpsSource'] as String?,
+      gpsCapturedAt: json['gpsCapturedAt'] as String?,
     );
   }
 }

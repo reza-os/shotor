@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'map_data_events.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -36,6 +37,7 @@ class AreaZoneService {
     final jsonString = jsonEncode(jsonList);
 
     await prefs.setString(_zonesKey, jsonString);
+    MapDataEvents.changed();
   }
 
   static Future<void> addZone(AreaZone zone) async {
@@ -67,5 +69,6 @@ class AreaZoneService {
   static Future<void> clearZones() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_zonesKey);
+    MapDataEvents.changed();
   }
 }

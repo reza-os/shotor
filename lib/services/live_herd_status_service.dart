@@ -1,6 +1,4 @@
-import '../models/area_zone.dart';
-import '../models/camel_profile.dart';
-import '../models/live_herd_settings.dart';
+
 import '../models/live_herd_status.dart';
 import '../models/tag_record.dart';
 import '../utils/iran_time.dart';
@@ -8,7 +6,12 @@ import 'area_zone_service.dart';
 import 'camel_profile_service.dart';
 import 'local_storage_service.dart';
 import 'zone_check_service.dart';
+import 'polygon_zone_service.dart';
+import 'current_geo_area_service.dart';
+import 'map_herd_status.dart';
+import 'record_day_service.dart';
 import 'camel_detail_service.dart';
+import 'unseen_reconciliation.dart';
 
 class LiveHerdStatusService {
   static DateTime? recordDateTime(TagRecord record) {
@@ -27,22 +30,6 @@ class LiveHerdStatusService {
     if (dateTime == null) return '-';
 
     return '${twoDigit(dateTime.hour)}:${twoDigit(dateTime.minute)}';
-  }
-
-  static String agoText(DateTime? dateTime) {
-    if (dateTime == null) return 'دیده نشده';
-
-    final diff = IranTime.nowWallClock().difference(dateTime);
-
-    if (diff.inMinutes < 1) {
-      return 'همین الان';
-    }
-
-    if (diff.inMinutes < 60) {
-      return '${diff.inMinutes} دقیقه قبل';
-    }
-
-    return '${diff.inHours} ساعت قبل';
   }
 
   static List<TagRecord> sortRecordsDesc(List<TagRecord> records) {
@@ -75,64 +62,51 @@ class LiveHerdStatusService {
     return sortRecordsDesc(filtered).first;
   }
 
+  /// A camel becomes unseen when its last PHONE reception ages beyond the
+  /// configured live window, regardless of historical records today.
   static LiveCamelLevel levelFor({
-    required bool criticalMissing,
-    required bool missing,
+    required bool seenToday,
     required bool insideForbidden,
     required bool outsideAllowed,
     required bool tagUnlocked,
     required bool lowBattery,
-    required bool seenRecently,
-    required bool seenInSession,
   }) {
-    if (criticalMissing || insideForbidden || outsideAllowed || tagUnlocked) {
+    if (!seenToday) return LiveCamelLevel.unseen;
+    if (insideForbidden || outsideAllowed || tagUnlocked) {
       return LiveCamelLevel.danger;
     }
-
-    if (missing || lowBattery || !seenRecently) {
-      return LiveCamelLevel.warning;
-    }
-
-    if (!seenInSession) {
-      return LiveCamelLevel.unseen;
-    }
-
+    if (lowBattery) return LiveCamelLevel.warning;
     return LiveCamelLevel.normal;
   }
 
   static String statusTextFor({
-    required bool criticalMissing,
-    required bool missing,
+    required bool seenToday,
     required bool insideForbidden,
     required bool outsideAllowed,
     required bool tagUnlocked,
     required bool lowBattery,
-    required bool seenRecently,
-    required bool seenInSession,
     required bool hasGps,
   }) {
+    if (!seenToday) return 'در بازه اخیر دیده نشده';
     if (tagUnlocked) return 'تگ باز شده';
     if (insideForbidden) return 'داخل محدوده خطر';
     if (outsideAllowed) return 'خارج محدوده مجاز';
-    if (criticalMissing) return 'دیده‌نشده طولانی';
-    if (missing) return 'هنوز دیده نشده';
     if (lowBattery) return 'باتری ضعیف';
-    if (!hasGps && seenInSession) return 'بدون GPS';
-    if (!seenRecently && seenInSession) return 'مدتی دریافت نشده';
-    if (seenInSession) return 'عادی';
-
-    return 'دیده نشده';
+    if (!hasGps) return 'بدون GPS';
+    return 'عادی';
   }
 
-  static Future<LiveHerdStatus> buildStatus({
-    required DateTime sessionStartTime,
-    required LiveHerdSettings settings,
-  }) async {
-    final now = DateTime.now();
+  static Future<LiveHerdStatus> buildStatus({int unseenIntervalMinutes = 5}) async {
+    final now = RecordDayService.today;
 
     final profiles = await CamelProfileService.loadProfiles();
-    final records = await LocalStorageService.loadTagRecords();
+    // Aggregate latest per tag in SQLite, not the last N raw packets.
+    // A chatty tag cannot push quieter camels out of the live snapshot.
+    final observations = await LocalStorageService.loadLiveHerdObservations(
+      RecordDayService.today);
     final zones = await AreaZoneService.loadZones();
+    final polygons = await PolygonZoneService.loadActiveZones();
+    final overall = await CurrentGeoAreaService.load();
     final details = await CamelDetailService.loadAllDetails(
       limit: 10000,
     );
@@ -145,29 +119,17 @@ class LiveHerdStatusService {
       return profile.isActive;
     }).toList();
 
-    final sortedRecords = sortRecordsDesc(records);
-
-    final sessionRecords = sortedRecords.where((record) {
-      final date = recordDateTime(record);
-
-      if (date == null) return false;
-
-      return !date.isBefore(sessionStartTime);
-    }).toList();
-
-    final lastRecord = sortedRecords.isEmpty ? null : sortedRecords.first;
-    final lastRecordAt = lastRecord == null ? null : recordDateTime(lastRecord);
-
-    final antennaSilent = lastRecordAt == null
-        ? true
-        : now.difference(lastRecordAt).inMinutes >=
-            settings.antennaSilentMinutes;
-
-    final missingCheckActive = now.difference(sessionStartTime).inMinutes >=
-        settings.missingAfterMinutes;
-
-    final criticalMissingActive = now.difference(sessionStartTime).inMinutes >=
-        settings.criticalMissingAfterMinutes;
+    // Reception timestamps are authoritative for the LIVE view. Device
+    // timestamps remain available to historical reports and detail pages.
+    final latestByTag = {
+      for (final observation in observations) observation.record.tagId: observation,
+    };
+    DateTime? lastRecordAt;
+    for (final observation in observations) {
+      if (lastRecordAt == null || observation.observedAt.isAfter(lastRecordAt)) {
+        lastRecordAt = observation.observedAt;
+      }
+    }
 
     final activeZones = zones.where((zone) {
       return zone.isActive;
@@ -176,28 +138,17 @@ class LiveHerdStatusService {
     final camels = <LiveCamelStatus>[];
 
     for (final profile in activeProfiles) {
-    final detail = detailsByTagId[profile.tagId];
-      final sessionRecord = latestRecordForTag(
-        tagId: profile.tagId,
-        records: sessionRecords,
+      final detail = detailsByTagId[profile.tagId];
+      final observation = latestByTag[profile.tagId];
+      final sessionRecord = observation?.record;
+      final lastSeenAt = observation?.observedAt;
+
+      final seenInSession = UnseenReconciliation.isFresh(
+        receivedAt: lastSeenAt,
+        now: now,
+        intervalMinutes: unseenIntervalMinutes,
       );
-
-      final previousRecord = latestRecordForTag(
-        tagId: profile.tagId,
-        records: sortedRecords,
-      );
-
-      final lastVisibleRecord = sessionRecord ?? previousRecord;
-      final lastSeenAt =
-          sessionRecord == null ? null : recordDateTime(sessionRecord);
-
-      final seenInSession = sessionRecord != null;
-
-      final seenRecently = lastSeenAt != null &&
-          now.difference(lastSeenAt).inMinutes <= settings.recentSeenMinutes;
-
-      final missing = missingCheckActive && !seenInSession;
-      final criticalMissing = criticalMissingActive && !seenInSession;
+      final missing = !seenInSession;
 
       final lowBattery = sessionRecord?.isBatteryLow == true;
       final tagUnlocked = sessionRecord?.lock == 0;
@@ -209,51 +160,58 @@ class LiveHerdStatusService {
       var outsideAllowed = false;
       var insideForbidden = false;
 
-      if (sessionRecord != null && hasGps && activeZones.isNotEmpty) {
+      if (sessionRecord != null && hasGps) {
         final result = ZoneCheckService.checkRecord(
           record: sessionRecord,
           zones: activeZones,
+          polygons: polygons,
         );
-
+        final assessment = MapHerdStatus.assess(
+          sessionRecord, overall, activeZones, polygons,
+          useLegacyOverallBounds: overall != null,
+        );
         insideForbidden = result.isInsideForbiddenZone;
-        outsideAllowed = result.isOutsideAllowedZones;
-
-        insideAllowed = !insideForbidden && !outsideAllowed;
+        outsideAllowed = assessment.state == MapBoundaryState.outside &&
+            !insideForbidden;
+        insideAllowed = assessment.state == MapBoundaryState.inside &&
+            !insideForbidden;
       }
 
       final level = levelFor(
-        criticalMissing: criticalMissing,
-        missing: missing,
+        seenToday: seenInSession,
         insideForbidden: insideForbidden,
         outsideAllowed: outsideAllowed,
         tagUnlocked: tagUnlocked,
         lowBattery: lowBattery,
-        seenRecently: seenRecently,
-        seenInSession: seenInSession,
       );
 
-      final statusText = statusTextFor(
-        criticalMissing: criticalMissing,
-        missing: missing,
+      // The active chip represents camels with a non-problem state today.
+      final activeToday = seenInSession && level == LiveCamelLevel.normal;
+
+      var statusText = statusTextFor(
+        seenToday: seenInSession,
         insideForbidden: insideForbidden,
         outsideAllowed: outsideAllowed,
         tagUnlocked: tagUnlocked,
         lowBattery: lowBattery,
-        seenRecently: seenRecently,
-        seenInSession: seenInSession,
         hasGps: hasGps,
       );
+      if (insideForbidden && !tagUnlocked && sessionRecord != null) {
+        statusText = MapHerdStatus.assess(
+          sessionRecord, overall, activeZones, polygons,
+          useLegacyOverallBounds: overall != null,
+        ).description;
+      }
 
       camels.add(
        LiveCamelStatus(
-         tagId: profile.tagId,
-         camelNo: profile.camelNo,
-         camelName: profile.camelName,
-         photoPath: detail?.photoPath ?? '',
+          tagId: profile.tagId,
+          camelNo: profile.camelNo,
+          camelName: profile.camelName,
+          photoPath: detail?.photoPath ?? '',
           seenInSession: seenInSession,
-          seenRecently: seenRecently,
+          activeToday: activeToday,
           missing: missing,
-          criticalMissing: criticalMissing,
           lowBattery: lowBattery,
           tagUnlocked: tagUnlocked,
           hasGps: hasGps,
@@ -261,8 +219,8 @@ class LiveHerdStatusService {
           outsideAllowed: outsideAllowed,
           insideForbidden: insideForbidden,
           lastSeenAt: lastSeenAt,
-          lastSeenText: seenInSession ? agoText(lastSeenAt) : 'در این جلسه دیده نشده',
-          lastLocationText: lastVisibleRecord?.locationName ?? '-',
+          lastSeenText: lastSeenAt == null ? 'امروز دریافت نشده' : 'آخرین دریافت ${timeText(lastSeenAt)}',
+          lastLocationText: sessionRecord?.locationName ?? '-',
           statusText: statusText,
           level: level,
           lastRecord: sessionRecord,
@@ -287,23 +245,19 @@ class LiveHerdStatusService {
     }).toList();
 
     final missingCamels = camels.where((camel) {
-      return camel.missing || camel.criticalMissing;
+      return camel.missing;
     }).toList();
 
     return LiveHerdStatus(
-      sessionStartTime: sessionStartTime,
       generatedAt: now,
       totalCamelCount: activeProfiles.length,
       seenInSessionCount: camels.where((camel) {
         return camel.seenInSession;
       }).length,
-      seenRecentlyCount: camels.where((camel) {
-        return camel.seenRecently;
+      activeTodayCount: camels.where((camel) {
+        return camel.activeToday;
       }).length,
       missingCount: missingCamels.length,
-      criticalMissingCount: camels.where((camel) {
-        return camel.criticalMissing;
-      }).length,
       insideAllowedCount: camels.where((camel) {
         return camel.insideAllowed;
       }).length,
@@ -317,8 +271,7 @@ class LiveHerdStatusService {
         return camel.tagUnlocked;
       }).length,
       lastRecordAt: lastRecordAt,
-      lastRecordText: agoText(lastRecordAt),
-      antennaSilent: antennaSilent,
+      lastRecordText: timeText(lastRecordAt),
       camels: camels,
       liveProblems: liveProblems,
       missingCamels: missingCamels,

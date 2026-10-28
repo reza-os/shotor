@@ -4,6 +4,8 @@ import 'package:sqflite/sqflite.dart';
 import '../models/tag_record.dart';
 import '../models/antenna_inbox_message.dart';
 import 'tag_records_events.dart';
+import 'record_day_service.dart';
+import '../utils/iran_time.dart';
 
 
 
@@ -48,7 +50,7 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 6,
+      version: 9,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE tag_records (
@@ -69,7 +71,10 @@ class DatabaseService {
             latitude REAL,
             longitude REAL,
             accuracy REAL,
-            messageId TEXT
+            messageId TEXT,
+            gpsSource TEXT,
+            gpsCapturedAt TEXT,
+            gpsDay TEXT
           )
         ''');
         await _createAntennaInboxTable(db);
@@ -77,6 +82,9 @@ class DatabaseService {
         await _createTagMessageIdIndex(db);
         await _addInboxUserDeletedColumn(db);
         await _createRepairIndexes(db);
+        await _createDayIndex(db, addColumn: true);
+        await _createDailyCountersTable(db);
+        await _addPhoneGpsColumns(db);
       },
      onUpgrade: (db, oldVersion, newVersion) async {
        if (oldVersion < 2) {
@@ -99,8 +107,70 @@ class DatabaseService {
          await _addInboxUserDeletedColumn(db);
          await _createRepairIndexes(db);
        }
+       if (oldVersion < 7) {
+         await _createDayIndex(db, addColumn: true);
+       }
+       if (oldVersion < 8) {
+         await _createDailyCountersTable(db);
+       }
+       if (oldVersion < 9) {
+         await _addPhoneGpsColumns(db);
+       }
      },
     );
+  }
+
+  /// Upgrade existing v8 Inbox messages without rewriting or re-locating them.
+  /// Incoming packets get their own GPS snapshot before durable enqueue/ACK.
+  static Future<void> _addPhoneGpsColumns(Database db) async {
+    await db.execute('ALTER TABLE antenna_inbox ADD COLUMN phone_latitude REAL');
+    await db.execute('ALTER TABLE antenna_inbox ADD COLUMN phone_longitude REAL');
+    await db.execute('ALTER TABLE antenna_inbox ADD COLUMN phone_accuracy REAL');
+    await db.execute('ALTER TABLE antenna_inbox ADD COLUMN phone_fix_at TEXT');
+    // Tag columns are already present when creating a database at v9.
+    // Upgrades from older databases must add them.
+    final columns = await db.rawQuery('PRAGMA table_info(tag_records)');
+    final names = columns.map((e) => e['name']).toSet();
+    if (!names.contains('gpsSource')) {
+      await db.execute('ALTER TABLE tag_records ADD COLUMN gpsSource TEXT');
+    }
+    if (!names.contains('gpsCapturedAt')) {
+      await db.execute('ALTER TABLE tag_records ADD COLUMN gpsCapturedAt TEXT');
+    }
+    if (!names.contains('gpsDay')) {
+      await db.execute('ALTER TABLE tag_records ADD COLUMN gpsDay TEXT');
+      // Pre-v9 GPS records retain their original event calendar day.
+      await db.execute('UPDATE tag_records SET gpsDay = eventDay '
+          'WHERE latitude IS NOT NULL AND longitude IS NOT NULL');
+    }
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_gps_day_tag '
+        'ON tag_records (gpsDay, tagId, id DESC)');
+  }
+
+  static Future<void> _createDailyCountersTable(Database db) async {
+    await db.execute('''CREATE TABLE IF NOT EXISTS daily_ingest_counts (
+      dayKey TEXT PRIMARY KEY, duplicateCount INTEGER NOT NULL DEFAULT 0
+    )''');
+  }
+
+  /// Indexed calendar days avoid scanning the entire 10-day event history on
+  /// each realtime refresh. Backfill old ISO records once during migration.
+  static Future<void> _createDayIndex(Database db, {required bool addColumn}) async {
+    if (addColumn) {
+      await db.execute('ALTER TABLE tag_records ADD COLUMN eventDay TEXT');
+    }
+    await db.execute("""
+      UPDATE tag_records SET eventDay = CASE
+        WHEN receivedDateTime IS NULL OR length(receivedDateTime) < 10 THEN NULL
+        WHEN substr(receivedDateTime,-1) IN ('Z','z')
+          OR substr(receivedDateTime,-6,1) IN ('+','-')
+          THEN date(receivedDateTime, '+210 minutes')
+        ELSE substr(receivedDateTime,1,10)
+      END WHERE eventDay IS NULL AND length(receivedDateTime) >= 10
+    """);
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_day_id ON tag_records(eventDay, id DESC)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_day_tag ON tag_records(eventDay,tagId,id DESC)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_day_status ON tag_records(eventDay, sendStatus)');
   }
 
   static Future<void> _createAntennaInboxTable(Database db) async {
@@ -213,9 +283,10 @@ class DatabaseService {
         whereArgs: [messageId],
         limit: 1,
       );
-      final wasInserted = existing.isEmpty;
+      final day = RecordDayService.forRecord(record);
+      final wasInserted = existing.isEmpty && day.compareTo(RecordDayService.oldestKey) >= 0;
       if (wasInserted) {
-        await txn.insert('tag_records', tagRecordToDbMap(record));
+        await txn.insert('tag_records', {...tagRecordToDbMap(record), 'eventDay': day});
       }
       await txn.update(
         'antenna_inbox',
@@ -231,6 +302,17 @@ class DatabaseService {
     });
     if (inserted) TagRecordsEvents.changed();
     return inserted;
+  }
+
+  /// Full original packet, read on-demand only (not for every list row).
+  static Future<String?> rawJsonForRecord(TagRecord record) async {
+    final messageId = record.messageId;
+    if (messageId == null || messageId.isEmpty) return null;
+    final db = await database;
+    final rows = await db.query('antenna_inbox',
+        columns: ['raw_json'], where: 'message_id = ?',
+        whereArgs: [messageId], limit: 1);
+    return rows.isEmpty ? null : rows.first['raw_json'] as String?;
   }
 
   static Future<bool> isAntennaInboxMessageProcessed(String messageId) async {
@@ -382,6 +464,18 @@ class DatabaseService {
 
 
 
+  /// Event day and phone-GPS acquisition day can differ when the ESP replays
+  /// queued records. Routes/maps follow the GPS acquisition day; event stats
+  /// continue to use the original ESP event time.
+  static String? gpsDayForRecord(TagRecord record) {
+    if (record.latitude == null || record.longitude == null) return null;
+    if (record.gpsSource == 'phone') {
+      final gpsAt = DateTime.tryParse(record.gpsCapturedAt ?? '');
+      if (gpsAt != null) return RecordDayService.key(IranTime.wallClock(gpsAt));
+    }
+    return RecordDayService.forRecord(record);
+  }
+
   static Map<String, dynamic> tagRecordToDbMap(TagRecord record) {
     return {
       'tagId': record.tagId,
@@ -401,6 +495,9 @@ class DatabaseService {
       'latitude': record.latitude,
       'longitude': record.longitude,
       'accuracy': record.accuracy,
+      'gpsSource': record.gpsSource,
+      'gpsCapturedAt': record.gpsCapturedAt,
+      'gpsDay': gpsDayForRecord(record),
     };
   }
 
@@ -432,6 +529,8 @@ class DatabaseService {
       latitude: (map['latitude'] as num?)?.toDouble(),
       longitude: (map['longitude'] as num?)?.toDouble(),
       accuracy: (map['accuracy'] as num?)?.toDouble(),
+      gpsSource: map['gpsSource'] as String?,
+      gpsCapturedAt: map['gpsCapturedAt'] as String?,
     );
   }
 }

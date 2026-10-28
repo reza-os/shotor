@@ -3,27 +3,40 @@ import 'dart:io';
 import '../models/geo_area.dart';
 import '../models/geo_point.dart';
 
+class KmlPolygonFeature {
+  final String name;
+  final List<GeoPoint> points;
+  final List<List<GeoPoint>> holes;
+  const KmlPolygonFeature({required this.name, required this.points,
+    this.holes = const []});
+}
+
 class KmlImportResult {
   final String fileName;
   final String name;
   final List<GeoPoint> points;
+  final List<KmlPolygonFeature> features;
 
   const KmlImportResult({
     required this.fileName,
     required this.name,
     required this.points,
+    this.features = const [],
   });
 
-  bool get isValid {
-    return points.length >= 3;
-  }
+  bool get isValid => features.any((feature) => feature.points.length >= 3) ||
+      points.length >= 3;
+
+  List<GeoPoint> get allPoints => features.isEmpty
+      ? points : features.expand((feature) => feature.points).toList();
 
   double get northLatitude {
-    if (points.isEmpty) return 0;
+    final geometry = allPoints;
+    if (geometry.isEmpty) return 0;
 
-    var value = points.first.latitude;
+    var value = geometry.first.latitude;
 
-    for (final point in points) {
+    for (final point in geometry) {
       if (point.latitude > value) {
         value = point.latitude;
       }
@@ -33,11 +46,12 @@ class KmlImportResult {
   }
 
   double get southLatitude {
-    if (points.isEmpty) return 0;
+    final geometry = allPoints;
+    if (geometry.isEmpty) return 0;
 
-    var value = points.first.latitude;
+    var value = geometry.first.latitude;
 
-    for (final point in points) {
+    for (final point in geometry) {
       if (point.latitude < value) {
         value = point.latitude;
       }
@@ -47,11 +61,12 @@ class KmlImportResult {
   }
 
   double get eastLongitude {
-    if (points.isEmpty) return 0;
+    final geometry = allPoints;
+    if (geometry.isEmpty) return 0;
 
-    var value = points.first.longitude;
+    var value = geometry.first.longitude;
 
-    for (final point in points) {
+    for (final point in geometry) {
       if (point.longitude > value) {
         value = point.longitude;
       }
@@ -61,11 +76,12 @@ class KmlImportResult {
   }
 
   double get westLongitude {
-    if (points.isEmpty) return 0;
+    final geometry = allPoints;
+    if (geometry.isEmpty) return 0;
 
-    var value = points.first.longitude;
+    var value = geometry.first.longitude;
 
-    for (final point in points) {
+    for (final point in geometry) {
       if (point.longitude < value) {
         value = point.longitude;
       }
@@ -108,31 +124,61 @@ class KmlImportService {
       tag: 'name',
     );
 
-    final coordinateBlocks =
-        _extractCoordinateBlocks(text);
-
-    final polygons = <List<GeoPoint>>[];
-
-    for (final block in coordinateBlocks) {
-      final points = _parseCoordinateBlock(block);
-
-      if (points.length >= 3) {
-        polygons.add(points);
-      }
+    // Read Polygon geometry only; LineString/Point coordinates must not
+    // accidentally turn into a geofence. A KML may contain many Placemarks.
+    final features = <KmlPolygonFeature>[];
+    final placemarks = RegExp(
+      r'<(?:\w+:)?Placemark\b[^>]*>([\s\S]*?)<\/(?:\w+:)?Placemark>',
+      caseSensitive: false,
+    ).allMatches(text).toList();
+    for (final placemark in placemarks) {
+      final body = placemark.group(1) ?? '';
+      final placemarkName = _extractFirstTagText(text: body, tag: 'name');
+      _collectPolygons(body, placemarkName.isEmpty ? name : placemarkName,
+          features);
     }
-
-    polygons.sort(
-      (a, b) => b.length.compareTo(a.length),
-    );
-
-    final selectedPoints =
-        polygons.isEmpty ? <GeoPoint>[] : polygons.first;
-
+    if (features.isEmpty) {
+      _collectPolygons(text, name, features);
+    }
+    features.sort((a, b) => b.points.length.compareTo(a.points.length));
+    final selectedPoints = features.isEmpty ? <GeoPoint>[] : features.first.points;
     return KmlImportResult(
       fileName: fileName,
       name: name.isEmpty ? fileName : name,
       points: selectedPoints,
+      features: features,
     );
+  }
+
+  static void _collectPolygons(String xml, String name,
+      List<KmlPolygonFeature> output) {
+    final polygons = RegExp(
+      r'<(?:\w+:)?Polygon\b[^>]*>([\s\S]*?)<\/(?:\w+:)?Polygon>',
+      caseSensitive: false,
+    ).allMatches(xml);
+    for (final polygon in polygons) {
+      final body = polygon.group(1) ?? '';
+      final outer = RegExp(
+        r'<(?:\w+:)?outerBoundaryIs\b[^>]*>([\s\S]*?)<\/(?:\w+:)?outerBoundaryIs>',
+        caseSensitive: false,
+      ).firstMatch(body)?.group(1) ?? body;
+      final coordinates = _extractCoordinateBlocks(outer);
+      if (coordinates.isEmpty) continue;
+      final points = _parseCoordinateBlock(coordinates.first);
+      if (points.length >= 3) {
+        output.add(KmlPolygonFeature(
+          name: name.isEmpty ? 'محدوده KML' : name,
+          points: points,
+          holes: RegExp(
+            r'<(?:\w+:)?innerBoundaryIs\b[^>]*>([\s\S]*?)<\/(?:\w+:)?innerBoundaryIs>',
+            caseSensitive: false,
+          ).allMatches(body).map((match) {
+            final blocks = _extractCoordinateBlocks(match.group(1) ?? '');
+            return blocks.isEmpty ? <GeoPoint>[] : _parseCoordinateBlock(blocks.first);
+          }).where((ring) => ring.length >= 3).toList(),
+        ));
+      }
+    }
   }
 
   static GeoArea applyResultToArea({
@@ -206,7 +252,8 @@ class KmlImportService {
       final latitude =
           double.tryParse(parts[1].trim());
 
-      if (latitude == null || longitude == null) {
+      if (latitude == null || longitude == null ||
+          !latitude.isFinite || !longitude.isFinite) {
         continue;
       }
 

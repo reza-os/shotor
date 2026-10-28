@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'record_day_service.dart';
 
 class LiveHerdSessionService {
   static const String _sessionStartKey = 'live_herd_session_start_time';
@@ -36,7 +37,8 @@ class LiveHerdSessionService {
 
     final current = sessionStartNotifier.value;
 
-    if (current != null) {
+    if (current != null &&
+        RecordDayService.key(current) == RecordDayService.todayKey) {
       return current;
     }
 
@@ -54,7 +56,7 @@ class LiveHerdSessionService {
       return current;
     }
 
-    final now = DateTime.now();
+    final now = RecordDayService.today;
 
     final prefs = await SharedPreferences.getInstance();
 

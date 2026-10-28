@@ -9,6 +9,7 @@ import '../models/camel_detail.dart';
 import '../models/camel_profile.dart';
 import '../services/camel_detail_service.dart';
 import '../services/camel_profile_service.dart';
+import '../services/camel_backup_service.dart';
 
 class CamelDetailFormPage extends StatefulWidget {
   const CamelDetailFormPage({super.key});
@@ -134,6 +135,12 @@ class _CamelDetailFormPageState extends State<CamelDetailFormPage> {
     );
 
     await CamelDetailService.saveDetail(detail);
+    if (photoPath.isNotEmpty) {
+      // The public copy is optional. Failure to access the selected folder
+      // must not prevent saving the camel's private photo and details.
+      try { await CamelBackupService.mirrorPhoto(profile.tagId, photoPath); }
+      catch (_) { /* Can be retried when exporting the next backup. */ }
+    }
 
     if (!mounted) return;
 
@@ -623,7 +630,7 @@ class _CamelDetailFormPageState extends State<CamelDetailFormPage> {
       borderRadius: BorderRadius.circular(18),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withOpacity(0.06),
+          color: Colors.black.withValues(alpha: 0.06),
           blurRadius: 16,
           offset: const Offset(0, 8),
         ),

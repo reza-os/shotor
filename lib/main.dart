@@ -2,73 +2,75 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'services/sms_service.dart';
+import 'auth/auth_gate.dart';
+import 'auth/app_auth_controller.dart';
 
 import 'models/area_zone.dart';
 import 'services/area_zone_service.dart';
+import 'services/polygon_zone_service.dart';
 
 import 'services/sms_auto_sender_service.dart';
-import 'models/sms_report_settings.dart';
-import 'services/sms_report_settings_service.dart';
-import 'services/sms_report_builder_service.dart';
-import 'services/direct_sms_service.dart';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'models/camel_profile.dart';
 import 'services/camel_profile_service.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:persian_datetime_picker/persian_datetime_picker.dart'
+    show PersianMaterialLocalizations, PersianCupertinoLocalizations;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'data/mock_data.dart';
-import 'data/mock_zones.dart';
-import 'data/mock_alerts.dart';
+
 import 'models/tag_record.dart';
+import 'utils/jalali_date_ui.dart';
 import 'utils/iran_time.dart';
-import 'models/zone_area.dart';
 import 'models/app_alert.dart';
-import 'models/antenna_payload.dart';
+
+import 'services/record_day_service.dart';
 import 'services/local_storage_service.dart';
-import 'services/antenna_inbox_repair_service.dart';
-import 'services/wifi_antenna_service.dart';
+
 import 'services/alert_service.dart';
 import 'models/app_settings.dart';
 import 'services/app_setting_service.dart';
 import 'models/antenna_log.dart';
 import 'services/antenna_log_service.dart';
-import 'services/location_service.dart';
 
-import 'services/zone_check_service.dart';
 
 
 import 'models/management_report.dart';
+import 'models/polygon_zone.dart';
+import 'screens/management_report_dashboard.dart';
+import 'screens/management_report_preview_page.dart';
 import 'services/management_report_service.dart';
 
 import 'services/management_excel_export_service.dart';
 
 import 'screens/live_herd_page.dart';
 import 'screens/map_page.dart';
-import 'services/live_herd_session_service.dart';
+
 
 import 'screens/camel_info_dashboard_page.dart';
+import 'screens/home_dashboard_view.dart';
+import 'screens/unified_settings_page.dart';
+import 'screens/all_received_records_page.dart';
+import 'services/antenna_session_controller.dart';
+import 'widgets/floating_nav_bar.dart';
 import 'services/saraban_export_service.dart';
 import 'services/herd_settings_service.dart';
-import 'screens/geo_area_selection_page.dart';
 
-import 'services/antenna_wifi_connector.dart';
-
-import 'models/antenna_ws_frame.dart';
-import 'models/antenna_inbox_message.dart';
-import 'services/database_service.dart';
 import 'services/tag_records_events.dart';
 
-import 'services/antenna_receive_processor.dart';
-
-import 'services/antenna_inbox_audit.dart';
 
 
 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await SmsAutoSenderService.initialize();
+  } catch (_) {
+    // SMS scheduler failure must never prevent starting the herd app.
+  }
   runApp(const SarabanApp());
 }
 
@@ -105,7 +107,7 @@ BoxDecoration cardDecoration({
         : null,
     boxShadow: [
       BoxShadow(
-        color: Colors.black.withOpacity(0.06),
+        color: Colors.black.withValues(alpha: 0.06),
         blurRadius: 18,
         offset: const Offset(0, 8),
       ),
@@ -121,15 +123,26 @@ class SarabanApp extends StatelessWidget {
     return MaterialApp(
       title: 'Saraban',
       debugShowCheckedModeBanner: false,
+      locale: const Locale('fa', 'IR'),
+      supportedLocales: const [Locale('fa', 'IR')],
+      localizationsDelegates: const [
+        PersianMaterialLocalizations.delegate,
+        PersianCupertinoLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: ThemeData(
         useMaterial3: true,
         fontFamily: 'Arial',
         scaffoldBackgroundColor: const Color(0xFFF5F7FA),
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0EA5A3)),
       ),
-      home: const Directionality(
-        textDirection: TextDirection.rtl,
-        child: SarabanShell(),
+      home: const AuthGate(
+        shell: Directionality(
+          textDirection: TextDirection.rtl,
+          child: SarabanShell(),
+        ),
       ),
     );
   }
@@ -145,26 +158,36 @@ class SarabanShell extends StatefulWidget {
 class _SarabanShellState extends State<SarabanShell> {
   int selectedIndex = 0;
 
-  final List<Widget> pages = const [
-    HomePage(),
-    ReceivePage(),
-    MapPage(),
-    AlertsPage(),
-    MorePage(),
+  final GlobalKey<MapPageState> _mapPageKey = GlobalKey<MapPageState>();
+
+  late final List<Widget> pages = [
+    const HomePage(),
+    LiveHerdPage(onShowCamelRoute: _showCamelRouteOnMapTab),
+    MapPage(key: _mapPageKey),
+    const MorePage(),
   ];
+
+  void _showCamelRouteOnMapTab(String tagId) {
+    setState(() => selectedIndex = 2);
+    // Wait until the IndexedStack displays the already-mounted map tab.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _mapPageKey.currentState?.showCamelRoute(tagId);
+    });
+  }
 
   @override
   void initState() {
     super.initState();
 
-    AlertService.refreshUnreviewedCount();
-    SmsAutoSenderService.start();
+    unawaited(AntennaSessionController.instance.initialize());
+    unawaited(SmsAutoSenderService.start().catchError((Object _) {}));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: const Color(0xFFFFF9F5),
       body: Container(
         width: double.infinity,
         height: double.infinity,
@@ -173,8 +196,8 @@ class _SarabanShellState extends State<SarabanShell> {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              Color(0xFFF7FAFD),
-              Color(0xFFF5F7FA),
+              Color(0xFFFFFCF9),
+              Color(0xFFFFF7F2),
             ],
           ),
         ),
@@ -188,78 +211,15 @@ class _SarabanShellState extends State<SarabanShell> {
           ),
         ),
       ),
-      bottomNavigationBar: Directionality(
-        textDirection: TextDirection.rtl,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.08),
-                blurRadius: 18,
-                offset: const Offset(0, -6),
-              ),
-            ],
-          ),
-          child: SafeArea(
-            top: false,
-            child: BottomNavigationBar(
-              currentIndex: selectedIndex,
-              type: BottomNavigationBarType.fixed,
-              backgroundColor: Colors.white,
-              elevation: 0,
-              selectedItemColor: AppColors.primary,
-              unselectedItemColor: Colors.grey,
-              selectedLabelStyle: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-              unselectedLabelStyle: const TextStyle(
-                fontSize: 11,
-              ),
-              onTap: (index) {
-                setState(() {
-                  selectedIndex = index;
-                });
-              },
-              items: [
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.home_rounded),
-                  label: 'خانه',
-                ),
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.settings_input_antenna_rounded),
-                  label: 'دریافت',
-                ),
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.map_rounded),
-                  label: 'نقشه',
-                ),
-                BottomNavigationBarItem(
-                  icon: ValueListenableBuilder<int>(
-                    valueListenable: AlertService.unreviewedCountNotifier,
-                    builder: (context, count, child) {
-                      if (count <= 0) {
-                        return const Icon(Icons.notifications_rounded);
-                      }
-
-                      return Badge(
-                        label: Text(
-                          count > 99 ? '99+' : count.toString(),
-                        ),
-                        child: const Icon(Icons.notifications_rounded),
-                      );
-                    },
-                  ),
-                  label: 'هشدارها',
-                ),
-                const BottomNavigationBarItem(
-                  icon: Icon(Icons.more_horiz_rounded),
-                  label: 'بیشتر',
-                ),
-              ],
-            ),
-          ),
+      bottomNavigationBar: ColoredBox(
+        color: const Color(0xFFFFF7F2),
+        child: FloatingNavBar(
+          currentIndex: selectedIndex,
+          onTap: (index) {
+            setState(() {
+              selectedIndex = index;
+            });
+          },
         ),
       ),
     );
@@ -275,9 +235,13 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   bool isLoading = true;
   List<TagRecord> records = [];
+  List<TagRecord> _mostRecentToday = [];
+  int _unsentTodayCount = 0;
+  int _homeRequest = 0;
 
   Timer? homeRefreshTimer;
   Timer? homeRecordsReloadTimer;
+  String _homeDayKey = '${IranTime.nowWallClock().year}-${IranTime.nowWallClock().month}-${IranTime.nowWallClock().day}';
 
   void _onRecordsChanged() {
     if (homeRecordsReloadTimer?.isActive == true) return;
@@ -293,14 +257,17 @@ class _HomePageState extends State<HomePage> {
     TagRecordsEvents.revision.addListener(_onRecordsChanged);
     loadRecords();
 
-    homeRefreshTimer = Timer.periodic(
-      const Duration(minutes: 1),
-      (_) {
-        if (!mounted) return;
-
+    homeRefreshTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (!mounted) return;
+      final today = IranTime.nowWallClock();
+      final dayKey = '${today.year}-${today.month}-${today.day}';
+      if (_homeDayKey != dayKey) {
+        _homeDayKey = dayKey;
+        unawaited(loadRecords());
+      } else {
         setState(() {});
-      },
-    );
+      }
+    });
   }
 
   @override
@@ -312,12 +279,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> loadRecords() async {
-    final loadedRecords = await LocalStorageService.loadTagRecords();
-
-    if (!mounted) return;
-
+    final request = ++_homeRequest;
+    final day = IranTime.nowWallClock();
+    final results = await Future.wait<dynamic>([
+      LocalStorageService.loadLatestByTagForDay(day),
+      LocalStorageService.loadLatestRecordsForDay(day, limit: 3),
+      LocalStorageService.countPendingRecordsForDay(day),
+    ]);
+    if (!mounted || request != _homeRequest) return;
     setState(() {
-      records = loadedRecords;
+      records = results[0] as List<TagRecord>;
+      _mostRecentToday = results[1] as List<TagRecord>;
+      _unsentTodayCount = results[2] as int;
       isLoading = false;
     });
   }
@@ -334,17 +307,9 @@ class _HomePageState extends State<HomePage> {
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 
-  List<TagRecord> getTodayRecords(List<TagRecord> source) {
-    final now = IranTime.nowWallClock();
-
-    return source.where((record) {
-      final parsed = recordDateTime(record);
-
-      if (parsed == null) return false;
-
-      return isSameDay(parsed, now);
-    }).toList();
-  }
+  // Home loads only today's indexed records. Do not apply a second date
+  // filter, which would discard antenna packets without a reliable ESP clock.
+  List<TagRecord> getTodayRecords(List<TagRecord> source) => source;
 
   List<TagRecord> getLatestTodayRecordsByTag(List<TagRecord> source) {
     final todayRecords = getTodayRecords(source);
@@ -400,1674 +365,55 @@ class _HomePageState extends State<HomePage> {
 
     final totalTags = latestTodayTags.length;
     final lowBatteryCount = getTodayLowBatteryCount(records);
-    final queuedCount = getTodayQueuedCount(records);
-    final lastReceiveText = getTodayLastReceiveText(records);
+    final queuedCount = _unsentTodayCount;
+    final lastReceiveText = getTodayLastReceiveText(_mostRecentToday);
 
-    return RefreshIndicator(
+    return HomeDashboardView(
+      isLoading: isLoading,
+      totalTags: totalTags,
+      lowBatteryCount: lowBatteryCount,
+      queuedCount: queuedCount,
+      lastReceiveText: lastReceiveText,
+      recentRecords: _mostRecentToday,
       onRefresh: loadRecords,
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        child: Column(
-          children: [
-            const AppHeader(title: 'نرم‌افزار ساربان'),
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                children: [
-                  Row(
-                    children: const [
-                      Expanded(
-                        child: StatusCard(
-                          title: 'دستگاه wifi',
-                          subtitle: 'آماده دریافت',
-                          icon: Icons.wifi_rounded,
-                        ),
-                      ),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: StatusCard(
-                          title: 'ذخیره محلی',
-                          subtitle: 'SQLite فعال',
-                          icon: Icons.storage_rounded,
-                        ),
-                      ),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: StatusCard(
-                          title: 'موقعیت GPS',
-                          subtitle: 'قابل ثبت',
-                          icon: Icons.location_on_rounded,
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: cardDecoration(),
-                    child: isLoading
-                        ? const Padding(
-                            padding: EdgeInsets.all(24),
-                            child: CircularProgressIndicator(),
-                          )
-                        : GridView.count(
-                            crossAxisCount: 2,
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            mainAxisSpacing: 12,
-                            crossAxisSpacing: 12,
-                            childAspectRatio: 1.55,
-                            children: [
-                              MetricCard(
-                                title: 'تگ‌های دیده‌شده',
-                                value: totalTags.toString(),
-                                subtitle: 'امروز',
-                                icon: Icons.pets_rounded,
-                                color: const Color(0xFF16965C),
-                              ),
-                              MetricCard(
-                                title: 'باتری ضعیف',
-                                value: lowBatteryCount.toString(),
-                                subtitle: 'امروز',
-                                icon: Icons.battery_alert_rounded,
-                                color: const Color(0xFFE87500),
-                              ),
-                              MetricCard(
-                                title: 'ارسال‌نشده',
-                                value: queuedCount.toString(),
-                                subtitle: 'امروز',
-                                icon: Icons.cloud_upload_rounded,
-                                color: const Color(0xFF086EBB),
-                              ),
-                              MetricCard(
-                                title: 'آخرین دریافت',
-                                value: lastReceiveText,
-                                subtitle: todayRecords.isEmpty
-                                    ? 'امروز داده‌ای نیست'
-                                    : 'امروز',
-                                icon: Icons.sync_rounded,
-                                color: const Color(0xFF7B3FB3),
-                              ),
-                            ],
-                          ),
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  const SizedBox(height: 14),
-
-                  InkWell(
-                    borderRadius: BorderRadius.circular(18),
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const CamelInfoDashboardPage(),
-                        ),
-                      );
-                    },
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: cardDecoration(),
-                      child: Row(
-                        children: const [
-                          CircleAvatar(
-                            radius: 26,
-                            backgroundColor: Color(0xFFEAF2FF),
-                            child: Icon(
-                              Icons.badge_rounded,
-                              color: Color(0xFF086EBB),
-                              size: 28,
-                            ),
-                          ),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'داشبورد اطلاعات شترها',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                                SizedBox(height: 5),
-                                Text(
-                                  'ثبت، ویرایش، جدول و توضیحات شترها',
-                                  style: TextStyle(
-                                    color: Colors.black54,
-                                    height: 1.5,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Icon(Icons.chevron_left_rounded),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-
-                  InkWell(
-                    borderRadius: BorderRadius.circular(18),
-                    onTap: () {
-
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              const GeoAreaSelectionPage(),
-                        ),
-                      );
-
-                    },
-
-                    child: Container(
-
-                      width: double.infinity,
-
-                      padding: const EdgeInsets.all(16),
-
-                      decoration: cardDecoration(),
-
-                      child: const Row(
-
-                        children: [
-
-                          CircleAvatar(
-
-                            backgroundColor:
-                                Color(0xFFEAF8F2),
-
-                            child: Icon(
-                              Icons.location_city_rounded,
-                              color: Color(0xFF008B62),
-                            ),
-
-                          ),
-
-                          SizedBox(width: 12),
-
-                          Expanded(
-
-                            child: Column(
-
-                              crossAxisAlignment:
-                                  CrossAxisAlignment.start,
-
-                              children: [
-
-                                Text(
-                                  'انتخاب محدوده فعالیت',
-                                  style: TextStyle(
-                                    fontWeight:
-                                        FontWeight.bold,
-                                  ),
-                                ),
-
-                                SizedBox(height: 5),
-
-                                Text(
-                                  'انتخاب استان، شهر و منطقه نقشه',
-                                  style: TextStyle(
-                                    color:
-                                        Colors.black54,
-                                  ),
-                                ),
-
-                              ],
-
-                            ),
-
-                          ),
-
-                          Icon(
-                            Icons.chevron_left_rounded,
-                          ),
-
-                        ],
-
-                      ),
-
-                    ),
-
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  GridView.count(
-                    crossAxisCount: 4,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
-                    childAspectRatio: 0.88,
-                    children: [
-                     ActionTile(
-                       title: 'گله زنده',
-                       icon: Icons.pets_rounded,
-                       filled: true,
-                       onTap: () {
-                         Navigator.of(context).push(
-                           MaterialPageRoute(
-                             builder: (_) => const LiveHerdPage(),
-                           ),
-                         );
-                       },
-                     ),
-                      ActionTile(
-                        title: 'نقشه گله',
-                        icon: Icons.map_rounded,
-                        onTap: () {
-                          goToTab(2);
-                        },
-                      ),
-                      ActionTile(
-                        title: 'هشدارها',
-                        icon: Icons.notifications_rounded,
-                        badge: lowBatteryCount > 0
-                            ? lowBatteryCount.toString()
-                            : null,
-                        onTap: () {
-                          goToTab(3);
-                        },
-                      ),
-                      ActionTile(
-                        title: 'گزارش روزانه',
-                        icon: Icons.assignment_rounded,
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const ReportPage(),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  Container(
-                    decoration: cardDecoration(),
-                    child: Column(
-                      children: [
-                        const SectionTitle(title: 'تگ‌های دریافت‌شده امروز'),
-                        if (todayRecords.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: Text(
-                              'امروز هنوز رکوردی ثبت نشده است. از صفحه دریافت، JSON را پردازش کن.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.black54,
-                                height: 1.7,
-                              ),
-                            ),
-                          )
-                        else
-                          ...todayRecords
-                              .take(4)
-                              .map((record) => RecentTagRow(record: record)),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  OperationStatusBanner(
-                    totalRecords: totalTags,
-                    queuedRecords: queuedCount,
-                    lowBatteryRecords: lowBatteryCount,
-                  ),
-
-                  const SizedBox(height: 20),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-
-
-
-class ReceivePage extends StatefulWidget {
-  const ReceivePage({super.key});
-
-  @override
-  State<ReceivePage> createState() => _ReceivePageState();
-}
-
-class _ReceivePageState extends State<ReceivePage>
-    with AutomaticKeepAliveClientMixin<ReceivePage> {
-  @override
-  bool get wantKeepAlive => true;
-
-  final WifiAntennaService antennaService = WifiAntennaService();
-
-
-  final AntennaReceiveProcessor receiveProcessor = AntennaReceiveProcessor();
-
-
-
-  static const int duplicateIgnoreSeconds = 10;
-
-  final Map<String, DateTime> recentRecordSignatures = {};
-
-  int duplicateSkipCount = 0;
-
-  Timer? receiveRefreshTimer;
-
-  AppSettings appSettings = const AppSettings();
-
-  final TextEditingController jsonController = TextEditingController(
-    text:
-        '{"Password":926877721,"State":3,"Lock":1,"Conter_Lock":10,"Battery_Percent":30,"Count":76}',
-  );
-
-  StreamSubscription<String>? antennaSubscription;
-
-
-  StreamSubscription<void>? antennaDisconnectSubscription;
-
-  Timer? antennaReconnectTimer;
-
-  bool allowAntennaReconnect = false;
-
-  int antennaReconnectAttempt = 0;
-
-  int antennaConnectionGeneration = 0;
-
-  // One database-backed Inbox worker. Incoming WebSocket frames schedule a
-  // scan rather than accumulating one Future per packet in memory.
-  Future<void>? _inboxDrainFuture;
-  bool _inboxDrainRequested = false;
-  int _inboxUiPending = 0;
-
-
-
-
-  late List<TagRecord> receivedRecords;
-
-  bool isRepairingInbox = false;
-  bool isAntennaConnected = false;
-  bool isAntennaConnecting = false;
-  String antennaStatus = 'قطع';
-  String lastAntennaJson = '-';
-  bool isGettingLocation = false;
-  String gpsStatus = 'آماده دریافت موقعیت';
-  AppLocationResult? lastLocationResult;
-
-  @override
-  void initState() {
-    super.initState();
-
-    receivedRecords = [];
-    unawaited(_loadAndRecoverInbox());
-
-    receiveRefreshTimer = Timer.periodic(
-      const Duration(minutes: 1),
-      (_) {
-        if (!mounted) return;
-        setState(() {});
+      onOpenHerd: () => goToTab(1),
+      onOpenManagementReport: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const ManagementReportPage(),
+          ),
+        );
+      },
+      onOpenMap: () => goToTab(2),
+      onOpenCamelDashboard: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const CamelInfoDashboardPage(),
+          ),
+        );
+      },
+      onOpenRecords: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const AllReceivedRecordsPage(),
+          ),
+        );
+      },
+      onOpenSettings: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const SystemSettingsPage(),
+          ),
+        );
       },
     );
   }
-
- @override
- void dispose() {
-   receiveRefreshTimer?.cancel();
-
-   antennaReconnectTimer?.cancel();
-
-   antennaSubscription?.cancel();
-   antennaDisconnectSubscription?.cancel();
-
-   unawaited(antennaService.dispose());
-   jsonController.dispose();
-
-   super.dispose();
- }
-
-  /// Read existing app data first, then replay committed but unfinished Inbox.
-  Future<void> _loadAndRecoverInbox() async {
-    try {
-      await loadAppSettings();
-      await loadReceivedRecords();
-      // Replays only unprocessed rows. No ESP connection or phone GPS needed.
-      await _scheduleInboxDrain();
-    } catch (error, stack) {
-      debugPrint('Inbox recovery error: $error\n$stack');
-    }
-  }
-
-  Future<void> loadReceivedRecords() async {
-    final loadedRecords = await LocalStorageService.loadTagRecords();
-
-    if (!mounted) return;
-
-    setState(() {
-      receivedRecords = loadedRecords;
-    });
-  }
-
-  Future<void> loadAppSettings() async {
-    final settings = await AppSettingsService.loadSettings();
-
-    if (!mounted) return;
-
-    setState(() {
-      appSettings = settings;
-    });
-  }
-
-  DateTime? recordDateTime(TagRecord record) {
-    final text = record.receivedDateTime.trim();
-
-    if (text.isEmpty) return null;
-
-    return IranTime.parseForDisplay(text);
-  }
-
-  bool isSameDay(DateTime a, DateTime b) {
-    return a.year == b.year && a.month == b.month && a.day == b.day;
-  }
-
-  List<TagRecord> getTodayRecords(List<TagRecord> source) {
-    final now = IranTime.nowWallClock();
-
-    return source.where((record) {
-      final parsed = recordDateTime(record);
-
-      if (parsed == null) return false;
-
-      return isSameDay(parsed, now);
-    }).toList();
-  }
-
-    Future<void> connectAntenna({
-    bool isAutoReconnect = false,
-    }) async {
-    if (isAntennaConnecting || isAntennaConnected || antennaService.isConnected) {
-      return;
-    }
-
-    cancelAntennaReconnect();
-
-    allowAntennaReconnect = true;
-
-    setState(() {
-      isAntennaConnecting = true;
-      antennaStatus = 'در حال اتصال به آنتن WiFi...';
-    });
-
-    try {
-      await antennaSubscription?.cancel();
-      final generationForConnection = ++antennaConnectionGeneration;
-
-   antennaSubscription = antennaService.jsonStream.listen(
-     (jsonText) async {
-       await handleAntennaWebSocketText(
-         jsonText,
-         generationForConnection,
-       );
-     },
-        onError: (error) {
-          if (!mounted) return;
-
-          setState(() {
-            antennaStatus = 'خطا در دریافت داده WiFi';
-            isAntennaConnected = false;
-          });
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('خطای دریافت WiFi: $error'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        },
-        onDone: () {
-          if (!mounted) return;
-
-          setState(() {
-            isAntennaConnected = false;
-            antennaStatus = 'اتصال WiFi قطع شد';
-          });
-        },
-      );
-
-
-      await antennaDisconnectSubscription?.cancel();
-
-      antennaDisconnectSubscription = antennaService.disconnectStream.listen(
-        (_) {
-          if (!mounted) return;
-
-          if (!allowAntennaReconnect) {
-            return;
-          }
-
-          setState(() {
-            isAntennaConnected = false;
-            antennaStatus = 'اتصال WebSocket قطع شد';
-          });
-
-          scheduleAntennaReconnect();
-        },
-      );
-
-
-      setState(() {
-        antennaStatus = 'در حال اتصال به WiFi آنتن...';
-      });
-
-    if (!isAutoReconnect) {
-     await AntennaWifiConnector.connectToAntennaWifi(
-       ssid: appSettings.wifiSsid,
-       password: appSettings.wifiPassword,
-     );
-
-  await Future.delayed(
-    const Duration(milliseconds: 800),
-  );
 }
 
 
 
 
-  await antennaService.connect(
-    url: appSettings.wifiWebSocketUrl,
-  );
-
-  setState(() {
-    antennaStatus = 'در حال ارسال ساعت گوشی به ESP...';
-  });
-
-  await antennaService.syncClockWithPhone();
-
-      await LiveHerdSessionService.startSession(
-        reset: true,
-      );
-
-      await AntennaLogService.addLog(
-        type: AntennaLogType.connected,
-        title: 'اتصال WiFi برقرار شد',
-        message: antennaService.connectedDeviceName,
-      );
-
-      if (!mounted) return;
-
-      antennaReconnectAttempt = 0;
-
-      setState(() {
-        isAntennaConnected = true;
-        antennaStatus = 'متصل: ${antennaService.connectedDeviceName}';
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'آنتن WiFi متصل شد: ${antennaService.connectedDeviceName}',
-          ),
-        ),
-      );
-    } catch (e) {
-      await antennaSubscription?.cancel();
-      antennaSubscription = null;
-
-      await antennaService.disconnect();
-
-      await AntennaLogService.addLog(
-        type: AntennaLogType.error,
-        title: 'خطا در اتصال WiFi',
-        message: e.toString(),
-      );
-
-      if (!mounted) return;
-
-     setState(() {
-       isAntennaConnected = false;
-       antennaStatus = isAutoReconnect
-           ? 'اتصال مجدد ناموفق؛ تلاش دوباره انجام می‌شود'
-           : 'اتصال WiFi ناموفق';
-     });
-
-     if (isAutoReconnect) {
-       scheduleAntennaReconnect();
-     }
-
-     if (!isAutoReconnect) {
-       ScaffoldMessenger.of(context).showSnackBar(
-         SnackBar(
-           content: Text('خطا در اتصال WiFi: $e'),
-           backgroundColor: Colors.red,
-         ),
-       );
-     }
-    } finally {
-      if (!mounted) return;
-
-      setState(() {
-        isAntennaConnecting = false;
-      });
-    }
-  }
-
- Future<void> disconnectAntenna() async {
-   antennaConnectionGeneration++;
-   allowAntennaReconnect = false;
-   cancelAntennaReconnect();
-
-   await antennaSubscription?.cancel();
-   antennaSubscription = null;
-
-   await antennaDisconnectSubscription?.cancel();
-   antennaDisconnectSubscription = null;
-
-   await antennaService.disconnect();
-
-   await AntennaWifiConnector.releaseWifiNetwork();
-
-   await AntennaLogService.addLog(
-     type: AntennaLogType.disconnected,
-     title: 'اتصال WiFi قطع شد',
-     message: 'کاربر اتصال WiFi آنتن را قطع کرد.',
-   );
-
-   if (!mounted) return;
-
-   setState(() {
-     isAntennaConnected = false;
-     isAntennaConnecting = false;
-     antennaStatus = 'قطع';
-   });
-
-   ScaffoldMessenger.of(context).showSnackBar(
-     const SnackBar(
-       content: Text('اتصال WiFi آنتن قطع شد.'),
-     ),
-   );
- }
-
-
- String buildRecordSignature(AntennaPayload payload) {
-   return '${payload.password}-'
-       '${payload.lock}-'
-       '${payload.counterLock}-'
-       '${payload.batteryPercent}';
- }
-
- bool shouldSkipDuplicate(String signature) {
-   final now = DateTime.now();
-
-   recentRecordSignatures.removeWhere((key, time) {
-     return now.difference(time).inSeconds > 60;
-   });
-
-   final previousTime = recentRecordSignatures[signature];
-
-   if (previousTime != null &&
-       now.difference(previousTime).inSeconds < duplicateIgnoreSeconds) {
-     recentRecordSignatures[signature] = now;
-     return true;
-   }
-
-   recentRecordSignatures[signature] = now;
-   return false;
- }
-
-
- Future<void> handleAntennaWebSocketText(
-   String jsonText,
-   int generation,
- ) async {
-   try {
-     final frame = AntennaWsFrame.parse(jsonText);
-
-    if (frame.isControlMessage) {
-      // Late callback from a previous socket must not control the new socket.
-      if (generation != antennaConnectionGeneration) return;
-      await handleAntennaControlFrame(frame);
-      return;
-    }
-
-
-
-    // WebSocket transport requires a durable MessageId. The manual JSON
-    // button is the only supported path for legacy frames without an ID.
-
-     if (!frame.isDataMessage || !frame.hasRequiredDataFields) {
-       await AntennaLogService.addLog(
-         type: AntennaLogType.error,
-         title: 'پیام نامعتبر از ESP',
-         message: jsonText,
-       );
-
-       return;
-     }
-
-     final inboxMessage = frame.toInboxMessage();
-
-     final inserted = await DatabaseService.insertAntennaInboxMessage(
-       inboxMessage,
-     );
-     if (!inserted &&
-         !await DatabaseService.antennaInboxDataMatches(inboxMessage)) {
-       // A reused MessageId with different data is a protocol error, not an
-       // ordinary retransmission; never ACK it as if safely delivered.
-       throw StateError('ESP MessageId collision or invalid Inbox insert');
-     }
-
-     // ACK on the delivering socket after the durable Inbox insert, without
-     // waiting for profile lookups, phone location, UI or TagRecord processing.
-     if (generation == antennaConnectionGeneration &&
-         antennaService.isConnected) {
-       try {
-         await antennaService.ack(inboxMessage.messageId);
-       } catch (error) {
-         debugPrint('ACK failed (ESP will resend): $error');
-       }
-     }
-
-     // Process from SQLite in one bounded worker; a crash before this call
-     // is still recoverable on next launch because Inbox already committed.
-     unawaited(_scheduleInboxDrain());
-   } catch (e) {
-     await AntennaLogService.addLog(
-       type: AntennaLogType.error,
-       title: 'خطا در تحلیل پیام WebSocket',
-       message: '$e\n$jsonText',
-     );
-
-     if (!mounted) return;
-
-     setState(() {
-       antennaStatus = 'پیام نامعتبر از ESP دریافت شد';
-     });
-   }
- }
-
-  Future<void> _scheduleInboxDrain() {
-    _inboxDrainRequested = true;
-    final current = _inboxDrainFuture;
-    if (current != null) return current;
-
-    final job = _runInboxDrain();
-    _inboxDrainFuture = job;
-    unawaited(job.whenComplete(() {
-      _inboxDrainFuture = null;
-      // An arrival can race the final empty database read. Preserve wakeups.
-      if (_inboxDrainRequested && mounted) {
-        unawaited(_scheduleInboxDrain());
-      }
-    }));
-    return job;
-  }
-
-  Future<void> _runInboxDrain() async {
-    try {
-      do {
-        _inboxDrainRequested = false;
-        var afterRowId = 0;
-        while (mounted) {
-          final batch = await DatabaseService.getPendingInboxBatch(
-            afterRowId: afterRowId,
-            limit: 50,
-          );
-          if (batch.isEmpty) break;
-          for (final entry in batch) {
-            if (!mounted) break;
-            afterRowId = entry.rowId;
-            // A failed record remains pending, but the rowid cursor allows
-            // subsequent messages to progress instead of blocking the queue.
-            await _processInboxMessage(entry.message);
-          }
-        }
-      } while (mounted && _inboxDrainRequested);
-    } catch (error, stack) {
-      debugPrint('Inbox drain stopped: $error\n$stack');
-      // Pending rows remain stored and will be retried on next app launch.
-    } finally {
-      if (mounted && _inboxUiPending > 0) {
-        _inboxUiPending = 0;
-        setState(() {});
-      }
-    }
-  }
-
-  Future<void> _processInboxMessage(AntennaInboxMessage message) async {
-    try {
-      if (await DatabaseService.isAntennaInboxMessageProcessed(
-        message.messageId,
-      )) {
-        return;
-      }
-
-      var didInsertRecord = false;
-      final result = await receiveProcessor.processJsonText(
-        jsonText: message.rawJson,
-        locationName: appSettings.defaultLocationName,
-        skipDuplicateCheck: true,
-        capturePhoneLocation: false,
-        persistRecord: (record) async {
-          didInsertRecord = await DatabaseService.commitInboxTagRecord(
-            messageId: message.messageId,
-            record: record,
-          );
-        },
-      );
-
-      if (!result.isSaved || result.record == null) {
-        throw StateError('Inbox record was not saved: ${result.message}');
-      }
-
-      if (didInsertRecord && mounted) {
-        receivedRecords.insert(0, result.record!);
-        lastAntennaJson = message.rawJson;
-        _inboxUiPending++;
-        // Rebuild at most once per 25 records, rather than on every queued
-        // frame. Flush the final partial batch in _runInboxDrain.finally.
-        if (_inboxUiPending >= 25) {
-          _inboxUiPending = 0;
-          setState(() {
-            jsonController.text = message.rawJson;
-            if (isAntennaConnected) {
-              antennaStatus = 'دریافت شد: ${result.tagId}';
-            }
-          });
-        }
-      }
-    } catch (error, stack) {
-      try {
-        if (!await DatabaseService.isAntennaInboxMessageProcessed(
-          message.messageId,
-        )) {
-          await DatabaseService.markAntennaInboxMessageError(
-            message.messageId,
-            error,
-          );
-        }
-        await AntennaLogService.addLog(
-          type: AntennaLogType.error,
-          title: 'خطای پردازش Inbox ESP',
-          message: '${message.messageId}: $error',
-        );
-      } catch (loggingError) {
-        debugPrint('Could not save inbox error: $loggingError');
-      }
-      debugPrint('Inbox processing failed: $error\n$stack');
-    }
-  }
-
-Future<void> handleAntennaControlFrame(AntennaWsFrame frame) async {
-  if (!mounted) return;
-
-  final type = frame.type ?? '';
-
-  if (type == 'hello') {
-    setState(() {
-      antennaStatus = 'ارتباط با ESP برقرار شد';
-    });
-    return;
-  }
-
-  if (type == 'time_synced') {
-    setState(() {
-      antennaStatus = 'ساعت ESP تنظیم شد؛ در حال فعال‌سازی صف پیام‌ها...';
-    });
-
-    await antennaService.subscribe();
-    return;
-  }
-
-  if (type == 'time_error') {
-    setState(() {
-      antennaStatus = 'خطا در تنظیم ساعت ESP';
-      isAntennaConnected = false;
-    });
-    return;
-  }
-
-  if (type == 'time_busy') {
-    setState(() {
-      antennaStatus = 'ESP اجازه تنظیم ساعت نمی‌دهد؛ اتصال دیگری فعال است';
-      isAntennaConnected = false;
-    });
-    return;
-  }
-
-  if (type == 'time_status') {
-    setState(() {
-      antennaStatus = 'وضعیت ساعت ESP دریافت شد';
-    });
-    return;
-  }
-
-  if (type == 'subscribed') {
-    setState(() {
-      antennaStatus = 'صف پیام‌های ESP فعال شد';
-      isAntennaConnected = true;
-    });
-    return;
-  }
-
-  if (type == 'busy') {
-    setState(() {
-      antennaStatus = 'ESP در حال استفاده توسط یک اتصال دیگر است';
-      isAntennaConnected = false;
-    });
-    return;
-  }
-
-  if (type == 'storage_error') {
-    setState(() {
-      antennaStatus = 'خطای حافظه در ESP';
-      isAntennaConnected = false;
-    });
-    return;
-  }
-
-  if (type == 'ack_timeout') {
-    setState(() {
-      antennaStatus = 'مهلت ACK تمام شد؛ تلاش برای اتصال مجدد';
-      isAntennaConnected = false;
-    });
-
-    scheduleAntennaReconnect();
-    return;
-  }
-
-  setState(() {
-    antennaStatus = 'پیام کنترلی ESP: $type';
-  });
-}
-
-
-
- void cancelAntennaReconnect() {
-   antennaReconnectTimer?.cancel();
-   antennaReconnectTimer = null;
-   antennaReconnectAttempt = 0;
- }
-
- void scheduleAntennaReconnect() {
-   if (!mounted) return;
-
-   if (!allowAntennaReconnect) {
-     return;
-   }
-
-
-   if (isAntennaConnecting || antennaService.isConnected) {
-     return;
-   }
-
-   if (antennaReconnectTimer?.isActive == true) {
-     return;
-   }
-
-   antennaReconnectAttempt++;
-
-   setState(() {
-     isAntennaConnected = false;
-     antennaStatus =
-         'اتصال قطع شد؛ تلاش مجدد $antennaReconnectAttempt تا ۳ ثانیه دیگر...';
-   });
-
-   antennaReconnectTimer = Timer(
-     const Duration(seconds: 3),
-     () {
-       if (!mounted) return;
-
-       connectAntenna(
-         isAutoReconnect: true,
-       );
-     },
-   );
- }
-
-
-
-
-  Future<AppLocationResult> getLocationForRecord() async {
-    if (mounted) {
-      setState(() {
-        isGettingLocation = true;
-        gpsStatus = 'در حال دریافت GPS...';
-      });
-    }
-
-    final result = await LocationService.getCurrentLocation();
-
-    if (mounted) {
-      setState(() {
-        isGettingLocation = false;
-        lastLocationResult = result;
-        gpsStatus = result.message;
-      });
-    }
-
-    return result;
-  }
-
-Future<void> processJsonText(
-  String jsonText, {
-  required String locationName,
-  bool showSnackBar = true,
-  bool skipDuplicateCheck = false,
-}) async {
-  final result = await receiveProcessor.processJsonText(
-    jsonText: jsonText,
-    locationName: locationName,
-    skipDuplicateCheck: skipDuplicateCheck,
-    onLocationStarted: () {
-      if (!mounted) return;
-
-      setState(() {
-        isGettingLocation = true;
-        gpsStatus = 'در حال دریافت GPS...';
-      });
-    },
-    onLocationFinished: (locationResult) {
-      if (!mounted) return;
-
-      setState(() {
-        isGettingLocation = false;
-        lastLocationResult = locationResult;
-        gpsStatus = locationResult.message;
-      });
-    },
-  );
-
-  if (!mounted) return;
-
-  if (result.isDuplicate) {
-    setState(() {
-      duplicateSkipCount++;
-      lastAntennaJson = result.jsonText;
-      jsonController.text = result.jsonText;
-      antennaStatus = 'داده تکراری نادیده گرفته شد: ${result.tagId}';
-    });
-
-    if (showSnackBar) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result.message),
-        ),
-      );
-    }
-
-    return;
-  }
-
-  if (result.isInvalidJson) {
-    setState(() {
-      lastAntennaJson = result.jsonText;
-      jsonController.text = result.jsonText;
-      antennaStatus = 'JSON نامعتبر';
-    });
-
-    if (showSnackBar) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result.message),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-
-    return;
-  }
-
-  final record = result.record;
-
-  if (record == null) {
-    return;
-  }
-
-  setState(() {
-    lastAntennaJson = result.jsonText;
-    jsonController.text = result.jsonText;
-    receivedRecords.insert(0, record);
-
-    if (isAntennaConnected) {
-      antennaStatus = 'دریافت شد: ${record.tagId}';
-    }
-  });
-
-  if (showSnackBar) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(result.message),
-      ),
-    );
-  }
-}
-
-
-
-  Future<void> processManualJson() async {
-    await processJsonText(
-      jsonController.text,
-      locationName: 'ورود دستی JSON',
-      showSnackBar: true,
-    );
-  }
-
-  Future<void> createAlertsForRecord(TagRecord record) async {
-    final now = DateTime.now();
-    final hour = now.hour.toString().padLeft(2, '0');
-    final minute = now.minute.toString().padLeft(2, '0');
-    final time = '$hour:$minute';
-
-    final alerts = <AppAlert>[];
-
-    if (record.isBatteryLow) {
-      alerts.add(
-        AppAlert(
-          id: 'low-battery-${record.tagId}-${now.millisecondsSinceEpoch}',
-          title: 'باتری ضعیف',
-          subtitle:
-              '${record.camelName} با تگ ${record.tagId} باتری ${record.batteryText} دارد.',
-          time: time,
-          relatedTagId: record.tagId,
-          locationName: record.locationName,
-          type: AlertType.lowBattery,
-          level: AlertLevel.warning,
-          messageSent: false,
-          reviewed: false,
-        ),
-      );
-    }
-
-    if (record.lock == 0) {
-      alerts.add(
-        AppAlert(
-          id: 'tag-unlocked-${record.tagId}-${now.millisecondsSinceEpoch}',
-          title: 'تگ از شتر باز شده',
-          subtitle:
-              '${record.camelName} با تگ ${record.tagId} وضعیت Lock = 0 دارد.',
-          time: time,
-          relatedTagId: record.tagId,
-          locationName: record.locationName,
-          type: AlertType.tagUnlocked,
-          level: AlertLevel.urgent,
-          messageSent: false,
-          reviewed: false,
-        ),
-      );
-    }
-
-    final zones = await AreaZoneService.loadZones();
-
-    if (record.latitude != null && record.longitude != null && zones.isNotEmpty) {
-      final zoneResult = ZoneCheckService.checkRecord(
-        record: record,
-        zones: zones,
-      );
-
-      if (zoneResult.isInsideForbiddenZone) {
-        final zoneNames = zoneResult.forbiddenZones
-            .map((zone) => zone.name)
-            .join('، ');
-
-        alerts.add(
-          AppAlert(
-            id: 'forbidden-zone-${record.tagId}-${now.millisecondsSinceEpoch}',
-            title: 'ورود به منطقه ممنوع',
-            subtitle:
-                '${record.camelName} با تگ ${record.tagId} وارد محدوده ممنوع «$zoneNames» شده است.',
-            time: time,
-            relatedTagId: record.tagId,
-            locationName: zoneNames,
-            type: AlertType.forbiddenZone,
-            level: AlertLevel.urgent,
-            messageSent: false,
-            reviewed: false,
-          ),
-        );
-      }
-
-      if (zoneResult.isOutsideAllowedZones) {
-        alerts.add(
-          AppAlert(
-            id: 'outside-zone-${record.tagId}-${now.millisecondsSinceEpoch}',
-            title: 'خروج از محدوده مجاز',
-            subtitle:
-                '${record.camelName} با تگ ${record.tagId} خارج از آغل، چراگاه، آبشخور یا مسیر تعریف‌شده قرار دارد.',
-            time: time,
-            relatedTagId: record.tagId,
-            locationName: record.locationName,
-            type: AlertType.routeExit,
-            level: AlertLevel.warning,
-            messageSent: false,
-            reviewed: false,
-          ),
-        );
-      }
-    }
-
-    await AlertService.addAlerts(alerts);
-  }
-
-  /// Only started by an explicit user confirmation after a read-only preview.
-  Future<void> repairOldEspHistory() async {
-    if (isRepairingInbox || isAntennaConnecting) return;
-    setState(() { isRepairingInbox = true; });
-    try {
-      // Do not run historical reconciliation while ESP is adding rows.
-      if (antennaService.isConnected || isAntennaConnected) {
-        await disconnectAntenna();
-      }
-      final draining = _inboxDrainFuture;
-      if (draining != null) await draining;
-      final preview = await AntennaInboxRepairService.preview();
-      if (!mounted) return;
-      final accepted = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('بازیابی سوابق ESP'),
-          content: SingleChildScrollView(
-            child: Text(
-              '${preview.summary}\n\n'
-              'این کار ابتدا رکوردهای قدیمی را با مشخصات دقیق وصل '
-              'می‌کند و فقط در صورت نبودن تطابق، رکورد جدید می‌سازد. '
-              'پیام‌های مبهم دست‌نخورده می‌مانند.\n\n'
-              'قبل از ادامه حتماً از دیتابیس گوشی نسخه پشتیبان داشته باشید. '
-              'برای پیام‌های بدون زمان معتبر، تاریخ نامشخص می‌ماند؛ '
-              'پیام‌های بدون GPS روی نقشه نمایش داده نمی‌شوند.',
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('انصراف')),
-            ElevatedButton(onPressed: () => Navigator.pop(dialogContext, true),
-                child: const Text('تأیید بازیابی')),
-          ],
-        ),
-      );
-      if (accepted != true || !mounted) return;
-      final report = await AntennaInboxRepairService.apply();
-      await loadReceivedRecords();
-      await AntennaInboxAudit.printReport();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('بازیابی پایان یافت؛ ${report.linkable} رکورد متصل، '
-            '${report.creatable} رکورد ساخته، ${report.ambiguous} مورد نامطمئن.'),
-        duration: const Duration(seconds: 8),
-      ));
-    } catch (error, stack) {
-      debugPrint('Inbox repair failed: $error\n$stack');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('خطای بازیابی: $error')),
-      );
-    } finally {
-      if (mounted) setState(() { isRepairingInbox = false; });
-    }
-  }
-
-  Future<void> saveAllReceivedRecords() async {
-    // Records are committed to SQLite as they arrive. Never overwrite the
-    // database with this page's stale in-memory snapshot.
-    await loadReceivedRecords();
-    if (!mounted) return;
-    final todayRecords = getTodayRecords(receivedRecords);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text('${todayRecords.length} رکورد امروز در حافظه محلی موجود است.'),
-    ));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-
-    final todayRecords = getTodayRecords(receivedRecords);
-
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          const AppHeader(title: 'دریافت زنده تگ‌ها'),
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: cardDecoration(),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: MiniInfo(
-                              title: 'wifi',
-                              value: isAntennaConnected ? 'متصل' : 'قطع',
-                            ),
-                          ),
-                          Expanded(
-                            child: MiniInfo(
-                              title: 'رکورد امروز',
-                              value: todayRecords.length.toString(),
-                            ),
-                          ),
-                          Expanded(
-                            child: MiniInfo(
-                              title: 'تکراری‌ها',
-                              value: duplicateSkipCount.toString(),
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      const SizedBox(height: 10),
-
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: isAntennaConnected
-                              ? const Color(0xFFEAF8F2)
-                              : const Color(0xFFFFF3E0),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isAntennaConnected
-                                ? const Color(0xFFB7E5D2)
-                                : const Color(0xFFFFCC80),
-                          ),
-                        ),
-                        child: Text(
-                          'وضعیت wifi: $antennaStatus',
-                          style: TextStyle(
-                            color: isAntennaConnected
-                                ? const Color(0xFF0A4F35)
-                                : const Color(0xFF8A4B00),
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 10),
-
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: isGettingLocation
-                              ? const Color(0xFFFFF3E0)
-                              : const Color(0xFFEAF8F2),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          children: [
-                            if (isGettingLocation)
-                              const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            else
-                              Icon(
-                                lastLocationResult?.success == true
-                                    ? Icons.gps_fixed_rounded
-                                    : Icons.gps_not_fixed_rounded,
-                                color: lastLocationResult?.success == true
-                                    ? const Color(0xFF008B62)
-                                    : const Color(0xFFE87500),
-                              ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'GPS: $gpsStatus',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF062C5E),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      if (lastAntennaJson != '-') ...[
-                        const SizedBox(height: 10),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5F7FA),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Directionality(
-                            textDirection: TextDirection.ltr,
-                            child: Text(
-                              lastAntennaJson,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Colors.black54,
-                                fontFamily: 'monospace',
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-
-                      const SizedBox(height: 12),
-
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: isAntennaConnecting || isAntennaConnected
-                                  ? null
-                                  : connectAntenna,
-                              icon: isAntennaConnecting
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Colors.white,
-                                      ),
-                                    )
-                                  : const Icon(Icons.wifi_rounded),
-                              label: Text(
-                                isAntennaConnecting
-                                    ? 'در حال اتصال...'
-                                    : 'اتصال wifi',
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF003B7A),
-                                foregroundColor: Colors.white,
-                                disabledBackgroundColor: Colors.grey.shade300,
-                                disabledForegroundColor: Colors.grey.shade600,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed:
-                                  isAntennaConnected ? disconnectAntenna : null,
-                              icon: const Icon(Icons.wifi_off_rounded),
-                              label: const Text('قطع wifi'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFD32F2F),
-                                foregroundColor: Colors.white,
-                                disabledBackgroundColor: Colors.grey.shade300,
-                                disabledForegroundColor: Colors.grey.shade600,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: isRepairingInbox ? null : repairOldEspHistory,
-                          icon: isRepairingInbox
-                              ? const SizedBox(width: 16, height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2))
-                              : const Icon(Icons.restore_rounded),
-                          label: Text(isRepairingInbox
-                              ? 'در حال بررسی/بازیابی Inbox...'
-                              : 'بررسی و بازیابی سوابق ESP'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: cardDecoration(),
-                  child: Column(
-                    children: [
-                      const SectionTitle(title: 'JSON دریافتی / تست دستی'),
-                      Directionality(
-                        textDirection: TextDirection.ltr,
-                        child: TextField(
-                          controller: jsonController,
-                          maxLines: 4,
-                          textAlign: TextAlign.left,
-                          decoration: InputDecoration(
-                            hintText: 'JSON دریافتی از دستگاه wifi',
-                            filled: true,
-                            fillColor: const Color(0xFFF5F7FA),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14),
-                              borderSide: BorderSide.none,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: ElevatedButton.icon(
-                          onPressed: processManualJson,
-                          icon: const Icon(
-                            Icons.settings_input_antenna_rounded,
-                          ),
-                          label: const Text('پردازش دستی JSON'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF008B62),
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                Container(
-                  decoration: cardDecoration(),
-                  child: Column(
-                    children: [
-                      const SectionTitle(title: 'تگ‌های دریافت‌شده امروز'),
-                      if (todayRecords.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Text(
-                            'امروز هنوز رکوردی دریافت نشده است.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.black54,
-                              height: 1.7,
-                            ),
-                          ),
-                        )
-                      else
-                        ...todayRecords
-                            .take(8)
-                            .map((record) => RecentTagRow(record: record)),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-                Container(
-                  decoration: cardDecoration(),
-                  child: Column(
-                    children: [
-                      const SectionTitle(title: 'آخرین سوابق ذخیره‌شده (همه تاریخ‌ها)'),
-                      if (receivedRecords.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Text('هنوز رکورد ذخیره‌شده‌ای وجود ندارد.'),
-                        )
-                      else
-                        ...receivedRecords.take(10).map(
-                          (record) => RecentTagRow(record: record),
-                        ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 16),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF008B62),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    onPressed: saveAllReceivedRecords,
-                    icon: const Icon(Icons.download_rounded),
-                    label: Text(
-                      'بازخوانی ${todayRecords.length} رکورد امروز',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-
-
+// ReceivePage removed: antenna session is now app-level and rendered in LiveHerdPage.
 
 class TagDetailPage extends StatefulWidget {
   final TagRecord record;
@@ -2259,8 +605,8 @@ class _TagDetailPageState extends State<TagDetailPage> {
                           ),
                           decoration: BoxDecoration(
                             color: isLowBattery
-                                ? Colors.red.withOpacity(0.10)
-                                : Colors.green.withOpacity(0.10),
+                                ? Colors.red.withValues(alpha: 0.10)
+                                : Colors.green.withValues(alpha: 0.10),
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
@@ -2672,7 +1018,8 @@ Future<void> createSystemJson() async {
 
 
   Future<void> loadSavedRecords() async {
-    final records = await LocalStorageService.loadTagRecords();
+    final records = await LocalStorageService.loadRecordsForDay(
+      selectedDate, limit: 100000);
 
     if (!mounted) return;
 
@@ -2694,26 +1041,17 @@ Future<void> createSystemJson() async {
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 
-  bool isRecordInSelectedDate(TagRecord record) {
-    final date = recordDate(record);
+  // The in-memory list is already limited to the selected day in SQLite.
+  bool isRecordInSelectedDate(TagRecord record) => true;
 
-    if (date == null) {
-      return false;
-    }
-
-    return isSameDay(date, selectedDate);
-  }
-
-  List<TagRecord> get dailyRecords {
-    return allRecords.where(isRecordInSelectedDate).toList();
-  }
+  List<TagRecord> get dailyRecords => allRecords;
 
   String twoDigit(int value) {
     return value.toString().padLeft(2, '0');
   }
 
   String dateText(DateTime date) {
-    return '${date.year}/${twoDigit(date.month)}/${twoDigit(date.day)}';
+    return JalaliDateUi.format(date);
   }
 
   bool get isToday {
@@ -2721,15 +1059,16 @@ Future<void> createSystemJson() async {
   }
 
   void changeDay(int offset) {
-    setState(() {
-      selectedDate = selectedDate.add(Duration(days: offset));
-    });
+    final next = selectedDate.add(Duration(days: offset));
+    if (RecordDayService.key(next).compareTo(RecordDayService.oldestKey) < 0 ||
+        RecordDayService.key(next).compareTo(RecordDayService.todayKey) > 0) return;
+    setState(() { selectedDate = next; isLoading = true; });
+    unawaited(loadSavedRecords());
   }
 
   void goToToday() {
-    setState(() {
-      selectedDate = IranTime.nowWallClock();
-    });
+    setState(() { selectedDate = RecordDayService.today; isLoading = true; });
+    unawaited(loadSavedRecords());
   }
 
   Future<void> syncQueuedRecords() async {
@@ -3173,22 +1512,45 @@ int maxGapMinutes = 30;
 
 List<TagRecord> records = [];
 List<AreaZone> zones = [];
+List<PolygonZone> reportPolygons = [];
 List<CamelProfile> profiles = [];
 List<AppAlert> alerts = [];
 
 AppSettings appSettings = const AppSettings();
 
 ManagementReport? report;
+int _reportLoadId = 0;
+Timer? _reportRefreshDebounce;
+
+void _onRecordChange() {
+  if (!isToday || !mounted) return;
+  _reportRefreshDebounce?.cancel();
+  _reportRefreshDebounce = Timer(const Duration(seconds: 6), () {
+    if (mounted && !isLoading) rebuildReport();
+  });
+}
 
   @override
   void initState() {
     super.initState();
+    TagRecordsEvents.revision.addListener(_onRecordChange);
     loadReportData();
   }
 
+  @override
+  void dispose() {
+    _reportRefreshDebounce?.cancel();
+    TagRecordsEvents.revision.removeListener(_onRecordChange);
+    super.dispose();
+  }
+
  Future<void> loadReportData() async {
-   final loadedRecords = await LocalStorageService.loadTagRecords();
+   final requestId = ++_reportLoadId;
+   final day = selectedDate;
+   final loadedRecords = await LocalStorageService.loadRecordsForDay(
+     day, limit: 100000);
    final loadedZones = await AreaZoneService.loadZones();
+   final loadedPolygons = await PolygonZoneService.loadActiveZones();
    final loadedProfiles = await CamelProfileService.loadProfiles();
    final loadedAlerts = await AlertService.loadAlerts();
    final loadedSettings = await AppSettingsService.loadSettings();
@@ -3196,17 +1558,19 @@ ManagementReport? report;
    final builtReport = ManagementReportService.buildDailyReport(
      records: loadedRecords,
      zones: loadedZones,
+     polygons: loadedPolygons,
      profiles: loadedProfiles,
-     date: selectedDate,
+     date: day,
      slotMinutes: slotMinutes,
      maxGapMinutes: maxGapMinutes,
    );
 
-   if (!mounted) return;
+   if (!mounted || requestId != _reportLoadId) return;
 
    setState(() {
      records = loadedRecords;
      zones = loadedZones;
+     reportPolygons = loadedPolygons;
      profiles = loadedProfiles;
      alerts = loadedAlerts;
      appSettings = loadedSettings;
@@ -3228,7 +1592,7 @@ ManagementReport? report;
   }
 
   String dateText(DateTime date) {
-    return '${date.year}/${twoDigit(date.month)}/${twoDigit(date.day)}';
+    return JalaliDateUi.format(date);
   }
 
   bool isSameDay(DateTime a, DateTime b) {
@@ -3240,10 +1604,10 @@ ManagementReport? report;
   }
 
   void changeDay(int offset) {
-    setState(() {
-      selectedDate = selectedDate.add(Duration(days: offset));
-    });
-
+    final next = selectedDate.add(Duration(days: offset));
+    if (RecordDayService.key(next).compareTo(RecordDayService.oldestKey) < 0 ||
+        RecordDayService.key(next).compareTo(RecordDayService.todayKey) > 0) return;
+    setState(() => selectedDate = next);
     rebuildReport();
   }
 
@@ -3256,11 +1620,11 @@ ManagementReport? report;
   }
 
   Future<void> pickDate() async {
-    final pickedDate = await showDatePicker(
-      context: context,
+    final pickedDate = await JalaliDateUi.pick(
+      context,
       initialDate: selectedDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      firstDate: RecordDayService.oldestDay,
+      lastDate: RecordDayService.today,
     );
 
     if (pickedDate == null) return;
@@ -3292,7 +1656,7 @@ ManagementReport? report;
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => PrintableManagementReportPreviewPage(
+        builder: (_) => ManagementReportPreviewPage(
           report: currentReport,
           appSettings: appSettings,
           date: selectedDate,
@@ -3350,65 +1714,84 @@ ManagementReport? report;
         ),
       );
     } finally {
-      if (!mounted) return;
-
-      setState(() {
-        isExportingExcel = false;
-      });
+      if (mounted) {
+        setState(() {
+          isExportingExcel = false;
+        });
+      }
     }
   }
 
 
+  void showAnalysisSettings() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFFFFAF6),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 22, 16, 18),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            buildReportSettings(),
+            const SizedBox(height: 10),
+            TextButton(onPressed: () => Navigator.of(sheetContext).pop(),
+              child: const Text('بستن')),
+          ]),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentReport = report;
-
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        backgroundColor: const Color(0xFFF5F7FA),
+        backgroundColor: const Color(0xFFFFF9F4),
         appBar: AppBar(
-          title: const Text('گزارش مدیریتی'),
+          title: const Text('گزارش'),
           centerTitle: true,
-          backgroundColor: const Color(0xFF062C5E),
+          backgroundColor: const Color(0xFF9F512E),
           foregroundColor: Colors.white,
-          actions: [
-            IconButton(
-              onPressed: rebuildReport,
-              icon: const Icon(Icons.refresh_rounded),
-              tooltip: 'بارگذاری مجدد',
-            ),
-          ],
+          actions: [IconButton(
+            onPressed: rebuildReport,
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'به‌روزرسانی گزارش',
+          )],
         ),
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 430),
-            child: isLoading || currentReport == null
-                ? const Center(child: CircularProgressIndicator())
-                : RefreshIndicator(
-                    onRefresh: rebuildReport,
-                    child: ListView(
-                      padding: const EdgeInsets.all(14),
-                      children: [
-                        buildDateSelector(),
-                        const SizedBox(height: 14),
-                        buildReportSettings(),
-                        const SizedBox(height: 14),
-                       buildSummarySection(currentReport.summary),
-                       const SizedBox(height: 14),
-                       buildExcelExportButton(),
-                       const SizedBox(height: 14),
-                       buildLastStatusSection(currentReport),
-                        const SizedBox(height: 14),
-                        buildTimeSlotSection(currentReport),
-                        const SizedBox(height: 14),
-                        buildLocationDurationSection(currentReport),
-                        const SizedBox(height: 30),
-                      ],
-                    ),
-                  ),
-          ),
-        ),
+        body: Center(child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: currentReport == null
+            ? const Center(child: CircularProgressIndicator())
+            : Stack(children: [
+              ManagementReportDashboard(
+                report: currentReport,
+                records: records,
+                zones: zones,
+                polygons: reportPolygons,
+                date: selectedDate,
+                dateLabel: dateText(selectedDate),
+                maxGapMinutes: maxGapMinutes,
+                previousDay: () => changeDay(-1),
+                nextDay: () => changeDay(1),
+                selectDate: pickDate,
+                selectToday: goToToday,
+                isToday: isToday,
+                openSettings: showAnalysisSettings,
+                openPreview: openManagerPreview,
+                exportExcel: exportExcelReport,
+                exporting: isExportingExcel,
+              ),
+              if (isLoading) const Positioned.fill(child: ColoredBox(
+                color: Color(0x77FFFFFF),
+                child: Center(child: CircularProgressIndicator()),
+              )),
+            ]),
+        )),
       ),
     );
   }
@@ -3445,7 +1828,7 @@ ManagementReport? report;
            child: OutlinedButton.icon(
              onPressed: openManagerPreview,
              icon: const Icon(Icons.preview_rounded),
-             label: const Text('پیش‌نمایش گزارش مدیر'),
+             label: const Text('پیش‌نمایش گزارش'),
              style: OutlinedButton.styleFrom(
                foregroundColor: const Color(0xFF003B7A),
                side: const BorderSide(
@@ -3811,694 +2194,6 @@ ManagementReport? report;
  }
 
 
-class PrintableManagementReportPreviewPage extends StatelessWidget {
-  final ManagementReport report;
-  final AppSettings appSettings;
-  final DateTime date;
-  final List<CamelProfile> profiles;
-  final List<AreaZone> zones;
-
-  const PrintableManagementReportPreviewPage({
-    super.key,
-    required this.report,
-    required this.appSettings,
-    required this.date,
-    required this.profiles,
-    required this.zones,
-  });
-
-  String twoDigit(int value) {
-    return value.toString().padLeft(2, '0');
-  }
-
-  String dateText(DateTime date) {
-    return '${date.year}/${twoDigit(date.month)}/${twoDigit(date.day)}';
-  }
-
-  List<CamelLastStatusReport> get problemRows {
-    return report.lastStatusRows.where((row) => row.hasProblem).toList();
-  }
-
-  List<CamelLastStatusReport> get normalRows {
-    return report.lastStatusRows.where((row) => !row.hasProblem).toList();
-  }
-
-  int get activeZonesCount {
-    return zones.where((zone) => zone.isActive).length;
-  }
-
-  Color statusColorByText(String text) {
-    if (text.contains('ممنوع') || text.contains('باز')) {
-      return const Color(0xFFD32F2F);
-    }
-
-    if (text.contains('خارج') ||
-        text.contains('ضعیف') ||
-        text.contains('دیده نشده')) {
-      return const Color(0xFFE87500);
-    }
-
-    return const Color(0xFF008B62);
-  }
-
-  String buildPlainTextReport() {
-    final summary = report.summary;
-
-    final buffer = StringBuffer();
-
-    buffer.writeln('گزارش مدیریتی ساربان');
-    buffer.writeln('تاریخ: ${dateText(date)}');
-    buffer.writeln('نام ساربان: ${appSettings.shepherdName}');
-    buffer.writeln('شناسه ساربان: ${appSettings.shepherdId}');
-    buffer.writeln('');
-    buffer.writeln('خلاصه مدیریتی:');
-    buffer.writeln('کل رکوردهای روز: ${summary.totalRecords}');
-    buffer.writeln('شترهای ثبت‌شده: ${summary.registeredCamelCount}');
-    buffer.writeln('شترهای دیده‌شده: ${summary.seenCamelCount}');
-    buffer.writeln('شترهای دیده‌نشده: ${summary.missingCamelCount}');
-    buffer.writeln('کل مشکلات مهم: ${summary.importantProblemsCount}');
-    buffer.writeln('');
-    buffer.writeln('جزئیات مشکلات:');
-    buffer.writeln('باتری ضعیف: ${summary.lowBatteryCamelCount}');
-    buffer.writeln('تگ باز شده: ${summary.unlockedEventCount}');
-    buffer.writeln('ورود به منطقه ممنوع: ${summary.forbiddenEventCount}');
-    buffer.writeln('خروج از محدوده مجاز: ${summary.outsideAllowedEventCount}');
-    buffer.writeln('');
-
-    if (problemRows.isEmpty) {
-      buffer.writeln('شتر نیازمند بررسی: موردی ثبت نشده');
-    } else {
-      buffer.writeln('شترهای نیازمند بررسی:');
-
-      for (final row in problemRows) {
-        buffer.writeln(
-          '- ${row.camelName} / ${row.tagId} / ${row.statusText} / ${row.lastLocationText}',
-        );
-      }
-    }
-
-    buffer.writeln('');
-    buffer.writeln('جمع‌بندی: ${managerConclusionText()}');
-
-    return buffer.toString();
-  }
-
-  String managerConclusionText() {
-    final summary = report.summary;
-
-    if (summary.totalRecords == 0) {
-      return 'برای این تاریخ رکوردی ثبت نشده است. وضعیت دریافت دستگاه، GPS و اتصال wifi بررسی شود.';
-    }
-
-    if (summary.importantProblemsCount == 0 && summary.missingCamelCount == 0) {
-      return 'وضعیت کلی گله عادی است. مورد فوری برای پیگیری در این گزارش ثبت نشده است.';
-    }
-
-    return 'گزارش دارای موارد نیازمند بررسی است. ابتدا شترهای دارای تگ باز، ورود به منطقه ممنوع و شترهای دیده‌نشده بررسی شوند.';
-  }
-
-  Future<void> copyReportText(BuildContext context) async {
-    await Clipboard.setData(
-      ClipboardData(text: buildPlainTextReport()),
-    );
-
-    if (!context.mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('متن گزارش مدیر کپی شد.'),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final summary = report.summary;
-
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: const Color(0xFFF5F7FA),
-        appBar: AppBar(
-          title: const Text('پیش‌نمایش گزارش مدیر'),
-          centerTitle: true,
-          backgroundColor: const Color(0xFF062C5E),
-          foregroundColor: Colors.white,
-          actions: [
-            IconButton(
-              onPressed: () {
-                copyReportText(context);
-              },
-              icon: const Icon(Icons.copy_rounded),
-              tooltip: 'کپی متن گزارش',
-            ),
-          ],
-        ),
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 430),
-            child: ListView(
-              padding: const EdgeInsets.all(14),
-              children: [
-                buildPrintableHeader(),
-                const SizedBox(height: 14),
-                buildManagerSummary(summary),
-                const SizedBox(height: 14),
-                buildProblemDetails(summary),
-                const SizedBox(height: 14),
-                buildProblemCamelsSection(),
-                const SizedBox(height: 14),
-                buildNormalCamelsSection(),
-                const SizedBox(height: 14),
-                buildConclusionSection(),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      copyReportText(context);
-                    },
-                    icon: const Icon(Icons.copy_rounded),
-                    label: const Text('کپی متن خلاصه گزارش'),
-                  ),
-                ),
-                const SizedBox(height: 30),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget buildPrintableHeader() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF062C5E),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Column(
-        children: [
-          const Icon(
-            Icons.assignment_rounded,
-            color: Colors.white,
-            size: 42,
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'گزارش قابل ارائه به مدیر مجموعه',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 19,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'تاریخ گزارش: ${dateText(date)}',
-            style: const TextStyle(
-              color: Colors.white,
-              height: 1.7,
-            ),
-          ),
-          Text(
-            'ساربان: ${appSettings.shepherdName}',
-            style: const TextStyle(
-              color: Colors.white,
-              height: 1.7,
-            ),
-          ),
-          Text(
-            'شناسه: ${appSettings.shepherdId}',
-            style: const TextStyle(
-              color: Colors.white,
-              height: 1.7,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildManagerSummary(ManagementReportSummary summary) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: cardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'خلاصه مدیریتی',
-            style: TextStyle(
-              color: Color(0xFF062C5E),
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 12),
-          ManagerPreviewInfoRow(
-            title: 'کل رکوردهای ثبت‌شده در روز',
-            value: summary.totalRecords.toString(),
-            status: summary.totalRecords == 0 ? 'بدون داده' : 'ثبت شده',
-            color: summary.totalRecords == 0
-                ? const Color(0xFFE87500)
-                : const Color(0xFF008B62),
-          ),
-          ManagerPreviewInfoRow(
-            title: 'شترهای ثبت‌شده',
-            value: summary.registeredCamelCount.toString(),
-            status: profiles.isEmpty ? 'بر اساس رکوردها' : 'بر اساس پروفایل‌ها',
-            color: const Color(0xFF086EBB),
-          ),
-          ManagerPreviewInfoRow(
-            title: 'شترهای دیده‌شده',
-            value: summary.seenCamelCount.toString(),
-            status: summary.seenCamelCount == 0 ? 'نیازمند بررسی' : 'عادی',
-            color: summary.seenCamelCount == 0
-                ? const Color(0xFFE87500)
-                : const Color(0xFF008B62),
-          ),
-          ManagerPreviewInfoRow(
-            title: 'شترهای دیده‌نشده',
-            value: summary.missingCamelCount.toString(),
-            status: summary.missingCamelCount > 0 ? 'نیازمند پیگیری' : 'عادی',
-            color: summary.missingCamelCount > 0
-                ? const Color(0xFFE87500)
-                : const Color(0xFF008B62),
-          ),
-          ManagerPreviewInfoRow(
-            title: 'کل مشکلات مهم',
-            value: summary.importantProblemsCount.toString(),
-            status: summary.importantProblemsCount > 0
-                ? 'نیازمند اقدام'
-                : 'عادی',
-            color: summary.importantProblemsCount > 0
-                ? const Color(0xFFD32F2F)
-                : const Color(0xFF008B62),
-          ),
-          ManagerPreviewInfoRow(
-            title: 'محدوده‌های فعال',
-            value: activeZonesCount.toString(),
-            status: activeZonesCount == 0 ? 'محدوده تعریف نشده' : 'فعال',
-            color: activeZonesCount == 0
-                ? const Color(0xFFE87500)
-                : const Color(0xFF008B62),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildProblemDetails(ManagementReportSummary summary) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: cardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'جزئیات مشکلات',
-            style: TextStyle(
-              color: Color(0xFF062C5E),
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ManagementBadge(
-                icon: Icons.battery_alert_rounded,
-                text: 'باتری ضعیف: ${summary.lowBatteryCamelCount}',
-                color: summary.lowBatteryCamelCount > 0
-                    ? const Color(0xFFE87500)
-                    : const Color(0xFF008B62),
-              ),
-              ManagementBadge(
-                icon: Icons.lock_open_rounded,
-                text: 'تگ باز: ${summary.unlockedEventCount}',
-                color: summary.unlockedEventCount > 0
-                    ? const Color(0xFFD32F2F)
-                    : const Color(0xFF008B62),
-              ),
-              ManagementBadge(
-                icon: Icons.block_rounded,
-                text: 'ممنوعه: ${summary.forbiddenEventCount}',
-                color: summary.forbiddenEventCount > 0
-                    ? const Color(0xFFD32F2F)
-                    : const Color(0xFF008B62),
-              ),
-              ManagementBadge(
-                icon: Icons.alt_route_rounded,
-                text: 'خارج محدوده: ${summary.outsideAllowedEventCount}',
-                color: summary.outsideAllowedEventCount > 0
-                    ? const Color(0xFFE87500)
-                    : const Color(0xFF008B62),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildProblemCamelsSection() {
-    return Container(
-      decoration: cardDecoration(),
-      child: Column(
-        children: [
-          const SectionTitle(title: 'شترهای نیازمند بررسی'),
-          if (problemRows.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'موردی برای بررسی ثبت نشده است.',
-                style: TextStyle(
-                  color: Color(0xFF008B62),
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            )
-          else
-            ...problemRows.map(
-              (row) => ManagerCamelPreviewRow(
-                row: row,
-                color: statusColorByText(row.statusText),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildNormalCamelsSection() {
-    final rows = normalRows.take(20).toList();
-
-    return Container(
-      decoration: cardDecoration(),
-      child: Column(
-        children: [
-          const SectionTitle(title: 'آخرین وضعیت شترهای عادی'),
-          if (rows.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'شتر عادی برای نمایش وجود ندارد.',
-                style: TextStyle(color: Colors.black54),
-              ),
-            )
-          else
-            ...rows.map(
-              (row) => ManagerCamelPreviewRow(
-                row: row,
-                color: const Color(0xFF008B62),
-              ),
-            ),
-          if (normalRows.length > 20)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                '${normalRows.length - 20} شتر دیگر در گزارش کامل Excel نمایش داده می‌شود.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.black54,
-                  fontSize: 12,
-                  height: 1.7,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildConclusionSection() {
-    final summary = report.summary;
-
-    final color = summary.totalRecords == 0
-        ? const Color(0xFFE87500)
-        : summary.importantProblemsCount > 0 || summary.missingCamelCount > 0
-            ? const Color(0xFFD32F2F)
-            : const Color(0xFF008B62);
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: color.withOpacity(0.30),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            color == const Color(0xFF008B62)
-                ? Icons.check_circle_rounded
-                : Icons.warning_rounded,
-            color: color,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              managerConclusionText(),
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.bold,
-                height: 1.7,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-
-
-class ManagerPreviewInfoRow extends StatelessWidget {
-  final String title;
-  final String value;
-  final String status;
-  final Color color;
-
-  const ManagerPreviewInfoRow({
-    super.key,
-    required this.title,
-    required this.value,
-    required this.status,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        vertical: 9,
-      ),
-      decoration: const BoxDecoration(
-        border: Border(
-          top: BorderSide(color: Color(0xFFE8EDF3)),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            value,
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            constraints: const BoxConstraints(maxWidth: 110),
-            padding: const EdgeInsets.symmetric(
-              horizontal: 7,
-              vertical: 5,
-            ),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              status,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.bold,
-                fontSize: 10,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class ManagerCamelPreviewRow extends StatelessWidget {
-  final CamelLastStatusReport row;
-  final Color color;
-
-  const ManagerCamelPreviewRow({
-    super.key,
-    required this.row,
-    required this.color,
-  });
-
-  IconData get icon {
-    if (row.statusText.contains('دیده نشده')) {
-      return Icons.visibility_off_rounded;
-    }
-
-    if (row.statusText.contains('ممنوع')) {
-      return Icons.block_rounded;
-    }
-
-    if (row.statusText.contains('خارج')) {
-      return Icons.warning_rounded;
-    }
-
-    if (row.statusText.contains('باتری')) {
-      return Icons.battery_alert_rounded;
-    }
-
-    if (row.statusText.contains('باز')) {
-      return Icons.lock_open_rounded;
-    }
-
-    return Icons.check_circle_rounded;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 14,
-        vertical: 12,
-      ),
-      decoration: const BoxDecoration(
-        border: Border(
-          top: BorderSide(color: Color(0xFFE8EDF3)),
-        ),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 21,
-                backgroundColor: color.withOpacity(0.12),
-                child: Icon(
-                  icon,
-                  color: color,
-                  size: 21,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      row.camelName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Directionality(
-                      textDirection: TextDirection.ltr,
-                      child: Text(
-                        row.tagId,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.black54,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                constraints: const BoxConstraints(maxWidth: 125),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.10),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  row.statusText,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 9),
-          Row(
-            children: [
-              Expanded(
-                child: ReportSmallInfo(
-                  icon: Icons.access_time_rounded,
-                  text: row.lastSeenText,
-                  color: const Color(0xFF086EBB),
-                ),
-              ),
-              Expanded(
-                child: ReportSmallInfo(
-                  icon: Icons.place_rounded,
-                  text: row.lastLocationText,
-                  color: const Color(0xFF7B3FB3),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-
-
-
 class ManagementSummaryCard extends StatelessWidget {
   final String title;
   final String value;
@@ -4523,7 +2218,7 @@ class ManagementSummaryCard extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 21,
-            backgroundColor: color.withOpacity(0.12),
+            backgroundColor: color.withValues(alpha: 0.12),
             child: Icon(icon, color: color),
           ),
           const SizedBox(width: 10),
@@ -4585,7 +2280,7 @@ class ManagementBadge extends StatelessWidget {
         vertical: 7,
       ),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.09),
+        color: color.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -4663,7 +2358,7 @@ class LastStatusReportRow extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 22,
-                backgroundColor: color.withOpacity(0.12),
+                backgroundColor: color.withValues(alpha: 0.12),
                 child: Icon(icon, color: color),
               ),
               const SizedBox(width: 10),
@@ -4702,7 +2397,7 @@ class LastStatusReportRow extends StatelessWidget {
                   vertical: 6,
                 ),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.10),
+                  color: color.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
@@ -4955,9 +2650,9 @@ class TimelineLegendItem extends StatelessWidget {
         vertical: 6,
       ),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.09),
+        color: color.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.18)),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -5048,7 +2743,7 @@ class CamelTimelineReportCard extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE8EDF3)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.035),
+            color: Colors.black.withValues(alpha: 0.035),
             blurRadius: 14,
             offset: const Offset(0, 7),
           ),
@@ -5179,12 +2874,12 @@ class TimelineSlotChip extends StatelessWidget {
       margin: const EdgeInsets.only(left: 8),
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: isEmpty ? const Color(0xFFF3F5F8) : color.withOpacity(0.10),
+        color: isEmpty ? const Color(0xFFF3F5F8) : color.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: isEmpty
               ? const Color(0xFFE3E7ED)
-              : color.withOpacity(0.26),
+              : color.withValues(alpha: 0.26),
         ),
       ),
       child: Column(
@@ -5287,7 +2982,7 @@ class LocationDurationReportCard extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE8EDF3)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.035),
+            color: Colors.black.withValues(alpha: 0.035),
             blurRadius: 14,
             offset: const Offset(0, 7),
           ),
@@ -5498,7 +3193,7 @@ class LocationDurationBar extends StatelessWidget {
                   Container(
                     height: 9,
                     decoration: BoxDecoration(
-                      color: color.withOpacity(0.10),
+                      color: color.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(999),
                     ),
                   ),
@@ -5524,270 +3219,37 @@ class LocationDurationBar extends StatelessWidget {
 
 
 
-class AlertsPage extends StatefulWidget {
-  const AlertsPage({super.key});
-
-  @override
-  State<AlertsPage> createState() => _AlertsPageState();
-}
-
-class _AlertsPageState extends State<AlertsPage> {
-  bool isLoading = true;
-  List<AppAlert> alerts = [];
-
-  @override
-  void initState() {
-    super.initState();
-    loadAlerts();
-  }
-
-  Future<void> loadAlerts() async {
-    final loadedAlerts = await AlertService.loadAlerts();
-
-    await AlertService.refreshUnreviewedCount();
-
-    if (!mounted) return;
-
-    setState(() {
-      alerts = loadedAlerts;
-      isLoading = false;
-    });
-  }
-
-  Future<void> markAlertReviewed(AppAlert alert) async {
-    if (alert.reviewed) return;
-
-    await AlertService.markReviewed(alert.id);
-
-    if (!mounted) return;
-
-    setState(() {
-      alerts = alerts.map((item) {
-        if (item.id == alert.id) {
-          return item.copyWith(reviewed: true);
-        }
-
-        return item;
-      }).toList();
-    });
-  }
-
-  Future<void> markAllReviewed() async {
-    await AlertService.markAllReviewed();
-
-    if (!mounted) return;
-
-    setState(() {
-      alerts = alerts.map((alert) {
-        return alert.copyWith(reviewed: true);
-      }).toList();
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('همه هشدارها دیده شدند.'),
-      ),
-    );
-  }
-
-  Future<void> clearAlerts() async {
-    await AlertService.clearAlerts();
-
-    if (!mounted) return;
-
-    setState(() {
-      alerts = [];
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('هشدارها پاک شدند.'),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final activeAlerts = alerts.where((alert) {
-      return alert.reviewed == false;
-    }).toList();
-
-    final urgentCount = activeAlerts.where((a) {
-      return a.level == AlertLevel.urgent;
-    }).length;
-
-    final lowBatteryCount = activeAlerts.where((a) {
-      return a.type == AlertType.lowBattery;
-    }).length;
-
-    final unsentCount = activeAlerts.where((a) {
-      return !a.messageSent;
-    }).length;
-
-    final unreviewedCount = activeAlerts.length;
-
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          const AppHeader(title: 'هشدارها و رویدادها'),
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: AlertSummaryCard(
-                        title: 'هشدار فوری',
-                        value: urgentCount.toString(),
-                        icon: Icons.warning_rounded,
-                        color: const Color(0xFFD32F2F),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: AlertSummaryCard(
-                        title: 'باتری ضعیف',
-                        value: lowBatteryCount.toString(),
-                        icon: Icons.battery_alert_rounded,
-                        color: const Color(0xFFE87500),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: AlertSummaryCard(
-                        title: 'دیده‌نشده',
-                        value: unreviewedCount.toString(),
-                        icon: Icons.visibility_off_rounded,
-                        color: const Color(0xFF086EBB),
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 14),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: loadAlerts,
-                        icon: const Icon(Icons.refresh_rounded),
-                        label: const Text('بارگذاری'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed:
-                            alerts.isEmpty ? null : markAllReviewed,
-                        icon: const Icon(Icons.done_all_rounded),
-                        label: const Text('سین همه'),
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 10),
-
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: alerts.isEmpty ? null : clearAlerts,
-                    icon: const Icon(Icons.delete_outline_rounded),
-                    label: const Text('پاک‌سازی هشدارها'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFFD32F2F),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                if (isLoading)
-                  const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: CircularProgressIndicator(),
-                  )
-                else if (alerts.isEmpty)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(18),
-                    decoration: cardDecoration(),
-                    child: const Column(
-                      children: [
-                        Icon(
-                          Icons.check_circle_outline_rounded,
-                          size: 54,
-                          color: Color(0xFF008B62),
-                        ),
-                        SizedBox(height: 12),
-                        Text(
-                          'فعلاً هشدار فعالی وجود ندارد.',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        SizedBox(height: 6),
-                        Text(
-                          'اگر باتری ضعیف باشد، تگ باز شود یا شتر از محدوده خارج شود، هشدار اینجا نمایش داده می‌شود.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.black54,
-                            height: 1.6,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  ...alerts.map(
-                    (alert) => GestureDetector(
-                      onTap: () {
-                        markAlertReviewed(alert);
-                      },
-                      child: Opacity(
-                        opacity: alert.reviewed ? 0.55 : 1,
-                        child: AlertCard(alert: alert),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class MorePage extends StatelessWidget {
   const MorePage({super.key});
 
-  void showAboutProject(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return Directionality(
-          textDirection: TextDirection.rtl,
-          child: AlertDialog(
-            title: const Text('درباره پروژه ساربان'),
-            content: const Text(
-              'سامانه پایش شترها با دریافت داده از آنتن wifi، ثبت اطلاعات تگ‌ها، مدیریت شترها، ذخیره سوابق و آماده‌سازی گزارش‌های روزانه.',
-              style: TextStyle(height: 1.7),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                child: const Text('بستن'),
-              ),
-            ],
-          ),
-        );
-      },
+  static const _brown = Color(0xFFA4542D);
+  static const _green = Color(0xFF21463C);
+
+  void _open(BuildContext context, Widget page) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+  }
+
+  Widget _tile(BuildContext context, String label, String subtitle,
+      IconData icon, Color color, Widget page) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(21),
+        border: Border.all(color: const Color(0xFFF0E5DF)),
+        boxShadow: [BoxShadow(color: const Color(0xFF7A3D1E).withValues(alpha: .05),
+          blurRadius: 16, offset: const Offset(0, 6))],
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        leading: CircleAvatar(radius: 25, backgroundColor: color.withValues(alpha: .12),
+          child: Icon(icon, color: color)),
+        title: Text(label, style: const TextStyle(fontSize: 16,
+          fontWeight: FontWeight.w700, color: Color(0xFF2F342F))),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12, color: Color(0xFF8C7E76))),
+        trailing: const Icon(Icons.chevron_left_rounded, color: Color(0xFF987A6B)),
+        onTap: () => _open(context, page),
+      ),
     );
   }
 
@@ -5796,232 +3258,111 @@ class MorePage extends StatelessWidget {
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        backgroundColor: const Color(0xFFF5F7FA),
-        body: Column(
-          children: [
-            const AppHeader(title: 'بیشتر'),
-            Expanded(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 430),
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 28),
-                    children: [
-                     Container(
-                       decoration: cardDecoration(),
-                       child: Material(
-                         color: Colors.white,
-                         borderRadius: BorderRadius.circular(20),
-                         clipBehavior: Clip.antiAlias,
-                         child: Column(
-                           children: [
-                            ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Color(0xFFEAF8F2),
-                                child: Icon(
-                                  Icons.pets_rounded,
-                                  color: Color(0xFF008B62),
-                                ),
-                              ),
-                              title: const Text(
-                                'مدیریت شترها',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: const Text(
-                                'ویرایش نام شترها و اتصال آن‌ها به شناسه تگ',
-                              ),
-                              trailing: const Icon(Icons.chevron_left_rounded),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const CamelManagementPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            const Divider(height: 1),
-                            ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Color(0xFFEAF2FF),
-                                child: Icon(
-                                  Icons.history_rounded,
-                                  color: Color(0xFF086EBB),
-                                ),
-                              ),
-                              title: const Text(
-                                'سوابق دریافت',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: const Text(
-                                'مشاهده رکوردهای ذخیره‌شده، فیلتر تاریخ و جستجو',
-                              ),
-                              trailing: const Icon(Icons.chevron_left_rounded),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const RecordsHistoryPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            const Divider(height: 1),
-                            ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Color(0xFFEAF8F2),
-                                child: Icon(
-                                  Icons.analytics_rounded,
-                                  color: Color(0xFF008B62),
-                                ),
-                              ),
-                              title: const Text(
-                                'گزارش مدیریتی',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: const Text(
-                                'خلاصه حضور، مکان، هشدار و آخرین وضعیت شترها',
-                              ),
-                              trailing: const Icon(Icons.chevron_left_rounded),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const ManagementReportPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            const Divider(height: 1),
-                            ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Color(0xFFEAF8F2),
-                                child: Icon(
-                                  Icons.terminal_rounded,
-                                  color: Color(0xFF008B62),
-                                ),
-                              ),
-                              title: const Text(
-                                'لاگ دریافت wifi',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: const Text(
-                                'مشاهده اتصال، خطاها و داده‌های دریافتی دستگاه',
-                              ),
-                              trailing: const Icon(Icons.chevron_left_rounded),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const AntennaLogsPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            const Divider(height: 1),
-                            ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Color(0xFFFFF3E0),
-                                child: Icon(
-                                  Icons.settings_rounded,
-                                  color: Color(0xFFE87500),
-                                ),
-                              ),
-                              title: const Text(
-                                'تنظیمات سامانه',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: const Text(
-                                'شماره مرکز، تنظیمات آنتن WiFi و پیامک',
-                              ),
-                              trailing: const Icon(Icons.chevron_left_rounded),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const SystemSettingsPage(),
-                                  ),
-                                );
-                              },
-                            ),
-                            const Divider(height: 1),
-                            ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Color(0xFFF0F0F0),
-                                child: Icon(
-                                  Icons.info_rounded,
-                                  color: Colors.black54,
-                                ),
-                              ),
-                              title: const Text(
-                                'درباره پروژه',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: const Text(
-                                'اطلاعات کلی سامانه پایش شترها',
-                              ),
-                              trailing: const Icon(Icons.chevron_left_rounded),
-                              onTap: () {
-                                showAboutProject(context);
-                              },
-                            ),
-                            const Divider(height: 1),
-                            ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Color(0xFFFFF3E0),
-                                child: Icon(Icons.sms_rounded, color: Color(0xFFE87500)),
-                              ),
-                              title: const Text(
-                                'تنظیمات پیامک',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: const Text('شماره مقصد، تایمر ارسال و متن گزارش پیامکی'),
-                              trailing: const Icon(Icons.chevron_left_rounded),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const SmsReportSettingsPage(),
-                                  ),
-                                );
-                              },
-                            ),
-
-                            const Divider(height: 1),
-                            ListTile(
-                              leading: const CircleAvatar(
-                                backgroundColor: Color(0xFFEAF8F2),
-                                child: Icon(
-                                  Icons.pets_rounded,
-                                  color: Color(0xFF008B62),
-                                ),
-                              ),
-                              title: const Text(
-                                'وضعیت زنده گله',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              subtitle: const Text(
-                                'گزارش لحظه‌ای از جلسه دریافت آنتن',
-                              ),
-                              trailing: const Icon(Icons.chevron_left_rounded),
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => const LiveHerdPage(),
-                                  ),
-                                );
-                              },
-                            ),
+        backgroundColor: const Color(0xFFFFF9F5),
+        body: Column(children: [
+          const AppHeader(title: 'بیشتر'),
+          Expanded(child: Center(child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: ListView(padding: const EdgeInsets.fromLTRB(16, 22, 16, 110),
+              children: [
+                const Text('مدیریت و تنظیمات', style: TextStyle(fontSize: 21,
+                  color: _green, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 8),
+                const Text('همه ابزارهای ضروری در یک جا',
+                  style: TextStyle(color: Color(0xFF897A72), fontSize: 12)),
+                const SizedBox(height: 22),
+                _tile(context, 'تنظیمات', 'ساربان، گله، Wi-Fi و پیامک',
+                    Icons.tune_rounded, _brown, const UnifiedSettingsPage()),
+                _tile(context, 'مدیریت شترها', 'افزودن، ویرایش و حذف شتر',
+                    Icons.pets_rounded, const Color(0xFF17795C),
+                    const CamelManagementPage()),
+                _tile(context, 'سوابق دریافت', 'جستجوی رکوردهای ذخیره‌شده',
+                    Icons.history_rounded, const Color(0xFF5380A8),
+                    const RecordsHistoryPage()),
+                _tile(context, 'گزارش', 'گزارش زمان و مکان شترها',
+                    Icons.analytics_rounded, const Color(0xFF9E785A),
+                    const ManagementReportPage()),
+                _tile(context, 'لاگ آنتن', 'وضعیت اتصال و خطاهای دریافت',
+                    Icons.wifi_rounded, const Color(0xFF68849C),
+                    const AntennaLogsPage()),
+                _tile(context, 'درباره سامانه', 'معرفی سامانه مدیریت گله',
+                    Icons.info_outline_rounded, const Color(0xFF8B8577),
+                    const AboutSarabanPage()),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(21),
+                    border: Border.all(color: const Color(0xFFF0E5DF)),
+                  ),
+                  child: ListTile(
+                    leading: const Icon(Icons.logout_rounded, color: Color(0xFFAB4B3A)),
+                    title: const Text('خروج از حساب'),
+                    subtitle: Text(AppAuthController.instance.isDemo
+                        ? 'حالت آزمایشی'
+                        : (AppAuthController.instance.user?.name ?? 'حساب کاربری')),
+                    onTap: () async {
+                      final accepted = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: const Text('خروج از حساب'),
+                          content: const Text('از حساب کاربری خارج می‌شوید؟'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+                              child: const Text('انصراف')),
+                            FilledButton(onPressed: () => Navigator.pop(dialogContext, true),
+                              child: const Text('خروج')),
                           ],
                         ),
-                      ),
-                      ),
-                    ],
+                      );
+                      if (accepted == true) {
+                        await SmsAutoSenderService.pause();
+                        if (AntennaSessionController.instance.isInitialized) {
+                          try {
+                            await AntennaSessionController.instance.disconnect();
+                          } catch (_) {
+                            // A failed network disconnect must not block sign-out.
+                          }
+                        }
+                        await AppAuthController.instance.signOut();
+                      }
+                    },
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
+          ))),
+        ]),
       ),
     );
   }
 }
 
+class AboutSarabanPage extends StatelessWidget {
+  const AboutSarabanPage({super.key});
+
+  @override
+  Widget build(BuildContext context) => Directionality(
+    textDirection: TextDirection.rtl,
+    child: Scaffold(
+      backgroundColor: const Color(0xFFFFF9F5),
+      appBar: AppBar(title: const Text('درباره سامانه'),
+        centerTitle: true, backgroundColor: const Color(0xFF21463C),
+        foregroundColor: Colors.white),
+      body: Center(child: Padding(padding: const EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.pets_rounded, color: Color(0xFFA4542D), size: 56),
+          const SizedBox(height: 12),
+          const Text('سامانه مدیریت هوشمند گله',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          Text('دریافت رکوردهای تگ از آنتن Wi-Fi، مدیریت شترها، نمایش موقعیت و تهیه گزارش‌های روزانه.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey.shade700, height: 1.8)),
+        ])),
+      ),
+    ),
+  );
+}
 
 class CamelManagementPage extends StatefulWidget {
   const CamelManagementPage({super.key});
@@ -6033,6 +3374,7 @@ class CamelManagementPage extends StatefulWidget {
 class _CamelManagementPageState extends State<CamelManagementPage> {
   bool isLoading = true;
   List<CamelProfile> profiles = [];
+  String camelSearch = '';
 
   @override
   void initState() {
@@ -6214,6 +3556,37 @@ class _CamelManagementPageState extends State<CamelManagementPage> {
     );
   }
 
+  Future<void> deleteCamel(CamelProfile profile) async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('حذف شتر'),
+        content: Text('«${profile.camelName}» با تگ ${profile.tagId} از فهرست شترها حذف شود؟\n\nسوابق رکوردهای دریافتی برای گزارش‌گیری حفظ می‌شوند. این تگ دوباره خودکار ثبت نخواهد شد و برای افزودن دوباره باید دستی ثبت شود.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('انصراف')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFBD4937)),
+            child: const Text('حذف شتر')),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+    try {
+      await CamelProfileService.deleteProfile(profile.tagId);
+      await loadProfiles();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('«${profile.camelName}» از فهرست حذف شد.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('حذف شتر انجام نشد. دوباره تلاش کنید.')),
+      );
+    }
+  }
+
   Future<void> toggleActive(CamelProfile profile, bool value) async {
     final updatedProfile = profile.copyWith(isActive: value);
 
@@ -6226,11 +3599,11 @@ class _CamelManagementPageState extends State<CamelManagementPage> {
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        backgroundColor: const Color(0xFFF5F7FA),
+        backgroundColor: const Color(0xFFFFF9F5),
         appBar: AppBar(
           title: const Text('مدیریت شترها'),
           centerTitle: true,
-          backgroundColor: const Color(0xFF062C5E),
+          backgroundColor: const Color(0xFF21463C),
           foregroundColor: Colors.white,
           actions: [
             IconButton(
@@ -6244,7 +3617,7 @@ class _CamelManagementPageState extends State<CamelManagementPage> {
           onPressed: () {
             openCamelDialog();
           },
-          backgroundColor: const Color(0xFF008B62),
+          backgroundColor: const Color(0xFFA4542D),
           foregroundColor: Colors.white,
           icon: const Icon(Icons.add_rounded),
           label: const Text('ثبت شتر'),
@@ -6279,7 +3652,7 @@ class _CamelManagementPageState extends State<CamelManagementPage> {
                               ),
                               const SizedBox(height: 8),
                               const Text(
-                                'از صفحه دریافت، یک تگ را پردازش کن یا از دکمه «ثبت شتر» استفاده کن.',
+                                'برای شروع، از دکمه «ثبت شتر» استفاده کن.',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   color: Colors.black54,
@@ -6300,42 +3673,54 @@ class _CamelManagementPageState extends State<CamelManagementPage> {
                       )
                     : RefreshIndicator(
                         onRefresh: loadProfiles,
-                        child: ListView(
-                          padding: const EdgeInsets.all(14),
-                          children: [
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(14),
-                              margin: const EdgeInsets.only(bottom: 14),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFEAF8F2),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: const Color(0xFFB7E5D2),
+                        child: Builder(builder: (context) {
+                          final q = camelSearch.trim().toLowerCase();
+                          final visible = q.isEmpty ? profiles : profiles.where((p) =>
+                            p.camelName.toLowerCase().contains(q) ||
+                            p.camelNo.toLowerCase().contains(q) ||
+                            p.tagId.toLowerCase().contains(q)).toList();
+                          return ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(14, 14, 14, 100),
+                            itemCount: visible.length + 2,
+                            itemBuilder: (context, index) {
+                              if (index == 0) return Column(children: [
+                                Container(width: double.infinity,
+                                  padding: const EdgeInsets.all(14),
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  decoration: BoxDecoration(color: const Color(0xFFE8F4ED),
+                                    borderRadius: BorderRadius.circular(16)),
+                                  child: Text('شترهای ثبت‌شده: ${profiles.length}',
+                                    style: const TextStyle(color: Color(0xFF21463C),
+                                      fontWeight: FontWeight.bold))),
+                                TextField(
+                                  onChanged: (v) => setState(() => camelSearch = v),
+                                  decoration: InputDecoration(
+                                    hintText: 'جستجو با نام، شماره یا تگ',
+                                    prefixIcon: const Icon(Icons.search_rounded),
+                                    filled: true, fillColor: Colors.white,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                      borderSide: BorderSide.none)),
                                 ),
-                              ),
-                              child: Text(
-                                'تعداد شترهای ثبت‌شده: ${profiles.length}',
-                                style: const TextStyle(
-                                  color: Color(0xFF0A4F35),
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            ...profiles.map(
-                              (profile) => CamelProfileCard(
+                                const SizedBox(height: 14),
+                              ]);
+                              if (index == visible.length + 1) {
+                                return visible.isEmpty
+                                  ? const Padding(padding: EdgeInsets.all(26),
+                                      child: Center(child: Text('شتری با این مشخصات پیدا نشد.')))
+                                  : const SizedBox(height: 12);
+                              }
+                              final profile = visible[index - 1];
+                              return CamelProfileCard(
+                                key: ValueKey(profile.tagId),
                                 profile: profile,
-                                onEdit: () {
-                                  openCamelDialog(profile: profile);
-                                },
-                                onActiveChanged: (value) {
-                                  toggleActive(profile, value);
-                                },
-                              ),
-                            ),
-                            const SizedBox(height: 80),
-                          ],
-                        ),
+                                onEdit: () => openCamelDialog(profile: profile),
+                                onActiveChanged: (value) => toggleActive(profile, value),
+                                onDelete: () => deleteCamel(profile),
+                              );
+                            },
+                          );
+                        }),
                       ),
           ),
         ),
@@ -6348,12 +3733,14 @@ class _CamelManagementPageState extends State<CamelManagementPage> {
 class CamelProfileCard extends StatelessWidget {
   final CamelProfile profile;
   final VoidCallback onEdit;
+  final VoidCallback onDelete;
   final ValueChanged<bool> onActiveChanged;
 
   const CamelProfileCard({
     super.key,
     required this.profile,
     required this.onEdit,
+    required this.onDelete,
     required this.onActiveChanged,
   });
 
@@ -6438,7 +3825,17 @@ class CamelProfileCard extends StatelessWidget {
                   label: const Text('ویرایش'),
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: onDelete,
+                icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                label: const Text('حذف'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFB34739),
+                  side: const BorderSide(color: Color(0xFFE9B9AF)),
+                ),
+              ),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
@@ -6454,7 +3851,7 @@ class CamelProfileCard extends StatelessWidget {
                   profile.isActive ? 'فعال' : 'غیرفعال',
                   style: TextStyle(
                     color: profile.isActive
-                        ? const Color(0xFF008B62)
+                        ? const Color(0xFF16795C)
                         : Colors.red,
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
@@ -6550,7 +3947,7 @@ class _RecordsHistoryPageState extends State<RecordsHistoryPage> {
   }
 
   String dateText(DateTime date) {
-    return '${date.year}/${twoDigit(date.month)}/${twoDigit(date.day)}';
+    return JalaliDateUi.format(date);
   }
 
   bool matchesDateFilter(TagRecord record) {
@@ -6636,8 +4033,8 @@ class _RecordsHistoryPageState extends State<RecordsHistoryPage> {
   }
 
   Future<void> pickDate() async {
-    final pickedDate = await showDatePicker(
-      context: context,
+    final pickedDate = await JalaliDateUi.pick(
+      context,
       initialDate: selectedDate,
       firstDate: DateTime(2020),
       lastDate: DateTime.now().add(const Duration(days: 365)),
@@ -7253,7 +4650,7 @@ Future<void> saveAndShareCsvFile() async {
                                 ),
                                 SizedBox(height: 8),
                                 Text(
-                                  'از صفحه دریافت، اتصال WiFi آنتن را برقرار کن یا JSON دستی پردازش کن.',
+                                  'از صفحه گله، اتصال آنتن WiFi را برقرار کن.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: Colors.black54,
@@ -7277,14 +4674,27 @@ Future<void> saveAndShareCsvFile() async {
                             ),
                           )
                         else
-                        ...visibleRecords.map(
-                          (record) => RecordHistoryCard(
-                            record: record,
-                            onDelete: () {
-                              deleteSingleRecord(record);
-                            },
+                          SizedBox(
+                            height: (visibleRecords.length * 110.0)
+                                .clamp(220.0, 480.0).toDouble(),
+                            child: ListView.builder(
+                              key: const PageStorageKey('history_cards'),
+                              primary: false,
+                              cacheExtent: 250,
+                              itemCount: visibleRecords.length,
+                              itemBuilder: (context, index) {
+                                final record = visibleRecords[index];
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: RecordHistoryCard(
+                                    key: ValueKey(record.dbId ?? record.messageId ?? index),
+                                    record: record,
+                                    onDelete: () => deleteSingleRecord(record),
+                                  ),
+                                );
+                              },
+                            ),
                           ),
-                        ),
                         const SizedBox(height: 40),
                       ],
                     ),
@@ -7321,7 +4731,7 @@ class HistorySummaryCard extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 20,
-            backgroundColor: color.withOpacity(0.12),
+            backgroundColor: color.withValues(alpha: 0.12),
             child: Icon(icon, color: color),
           ),
           const SizedBox(width: 10),
@@ -7388,7 +4798,7 @@ class RecordHistoryCard extends StatelessWidget {
       return 'تاریخ نامشخص';
     }
 
-    return '${date.year}/${twoDigit(date.month)}/${twoDigit(date.day)}';
+    return JalaliDateUi.format(date);
   }
 
   String get timeText {
@@ -7666,483 +5076,12 @@ class _HistoryMiniBadge extends StatelessWidget {
 
 
 
-class SystemSettingsPage extends StatefulWidget {
+/// Legacy route retained for callers outside the More tab.
+class SystemSettingsPage extends StatelessWidget {
   const SystemSettingsPage({super.key});
 
   @override
-  State<SystemSettingsPage> createState() => _SystemSettingsPageState();
-}
-
-class _SystemSettingsPageState extends State<SystemSettingsPage> {
-  final shepherdNameController = TextEditingController();
-  final shepherdIdController = TextEditingController();
-  final centerPhoneController = TextEditingController();
-  final locationNameController = TextEditingController();
-  final TextEditingController wifiSsidController = TextEditingController();
-  final TextEditingController wifiPasswordController = TextEditingController();
-  final TextEditingController wifiWebSocketUrlController = TextEditingController();
-  final herdIdController = TextEditingController();
-  final herdNameController = TextEditingController();
-  final camelCountController = TextEditingController();
-  final deviceIdController = TextEditingController();
-
-  bool smsEnabled = true;
-  bool isLoading = true;
-  bool isSaving = false;
-  bool wifiAutoReconnect = true;
-
-  @override
-  void initState() {
-    super.initState();
-    loadSettings();
-  }
-
- @override
- void dispose() {
-
-   shepherdNameController.dispose();
-   shepherdIdController.dispose();
-   centerPhoneController.dispose();
-
-   herdIdController.dispose();
-   herdNameController.dispose();
-   camelCountController.dispose();
-
-   deviceIdController.dispose();
-
-   locationNameController.dispose();
-
-
-   wifiSsidController.dispose();
-   wifiPasswordController.dispose();
-   wifiWebSocketUrlController.dispose();
-
-   super.dispose();
- }
-
-  Future<void> loadSettings() async {
-    final settings = await AppSettingsService.loadSettings();
-
-    if (!mounted) return;
-
-    setState(() {
-      shepherdNameController.text = settings.shepherdName;
-      shepherdIdController.text = settings.shepherdId;
-      centerPhoneController.text = settings.centerPhone;
-
-      locationNameController.text = settings.defaultLocationName;
-
-      wifiSsidController.text = settings.wifiSsid;
-      wifiPasswordController.text = settings.wifiPassword;
-      wifiWebSocketUrlController.text = settings.wifiWebSocketUrl;
-      wifiAutoReconnect = settings.wifiAutoReconnect;
-
-      herdIdController.text = settings.herdId;
-      herdNameController.text = settings.herdName;
-      camelCountController.text = settings.camelCount.toString();
-      deviceIdController.text = settings.deviceId;
-
-      smsEnabled = settings.smsEnabled;
-      isLoading = false;
-    });
-  }
-
-  Future<void> saveSettings() async {
-
-
-
-    setState(() {
-      isSaving = true;
-    });
-
-   final settings = AppSettings(
-
-     shepherdName:
-         shepherdNameController.text.trim().isEmpty
-             ? 'ساربان'
-             : shepherdNameController.text.trim(),
-
-     shepherdId:
-         shepherdIdController.text.trim().isEmpty
-             ? '-'
-             : shepherdIdController.text.trim(),
-
-     centerPhone:
-         centerPhoneController.text.trim(),
-
-
-         wifiSsid: wifiSsidController.text.trim().isEmpty
-             ? 'Mobile_Antenna_ESP32'
-             : wifiSsidController.text.trim(),
-
-         wifiPassword: wifiPasswordController.text.trim().isEmpty
-             ? 'antenna123'
-             : wifiPasswordController.text.trim(),
-
-         wifiWebSocketUrl: wifiWebSocketUrlController.text.trim().isEmpty
-             ? 'ws://192.168.4.1:81/'
-             : wifiWebSocketUrlController.text.trim(),
-
-         wifiAutoReconnect: wifiAutoReconnect,
-
-
-     herdId:
-         herdIdController.text.trim(),
-
-     herdName:
-         herdNameController.text.trim(),
-
-
-     camelCount:
-         int.tryParse(
-           camelCountController.text.trim(),
-         ) ?? 0,
-
-
-     deviceId:
-         deviceIdController.text.trim().isEmpty
-             ? 'SARABAN-001'
-             : deviceIdController.text.trim(),
-
-
-    defaultLocationName:
-        locationNameController.text.trim().isEmpty
-            ? 'دریافت از WiFi آنتن'
-            : locationNameController.text.trim(),
-
-     smsEnabled:
-         smsEnabled,
-
-   );
-
-    await AppSettingsService.saveSettings(settings);
-
-    if (!mounted) return;
-
-    setState(() {
-      isSaving = false;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('تنظیمات سامانه ذخیره شد.'),
-      ),
-    );
-  }
-
-  Future<void> resetSettings() async {
-    await AppSettingsService.resetSettings();
-    await loadSettings();
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('تنظیمات به حالت پیش‌فرض برگشت.'),
-      ),
-    );
-  }
-
-  Widget buildTextField({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-    TextInputType keyboardType = TextInputType.text,
-    TextDirection textDirection = TextDirection.rtl,
-  }) {
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      textDirection: textDirection,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon),
-        filled: true,
-        fillColor: const Color(0xFFF5F7FA),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide.none,
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: const Color(0xFFF5F7FA),
-        appBar: AppBar(
-          title: const Text('تنظیمات سامانه'),
-          centerTitle: true,
-          backgroundColor: const Color(0xFF062C5E),
-          foregroundColor: Colors.white,
-        ),
-        body: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 430),
-            child: isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : SingleChildScrollView(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      children: [
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: cardDecoration(),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SectionTitle(title: 'اطلاعات ساربان'),
-                              buildTextField(
-                                controller: shepherdNameController,
-                                label: 'نام ساربان',
-                                icon: Icons.person_rounded,
-                              ),
-                              const SizedBox(height: 12),
-                              buildTextField(
-                                controller: shepherdIdController,
-                                label: 'شناسه ساربان',
-                                icon: Icons.badge_rounded,
-                                textDirection: TextDirection.ltr,
-                              ),
-                              const SizedBox(height: 12),
-                              buildTextField(
-                                controller: centerPhoneController,
-                                label: 'شماره مرکز / مدیر',
-                                icon: Icons.phone_rounded,
-                                keyboardType: TextInputType.phone,
-                                textDirection: TextDirection.ltr,
-                              ),
-                            ],
-                          ),
-                        ),
-                          const SizedBox(height: 14),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: cardDecoration(),
-
-                          child: Column(
-
-                            crossAxisAlignment:
-                                CrossAxisAlignment.start,
-
-                            children: [
-
-                              const SectionTitle(
-                                title: 'اطلاعات گله',
-                              ),
-
-
-                              buildTextField(
-                                controller: herdNameController,
-                                label: 'نام گله',
-                                icon: Icons.pets_rounded,
-                              ),
-
-
-                              const SizedBox(height:12),
-
-
-                              buildTextField(
-                                controller: herdIdController,
-                                label: 'شناسه گله',
-                                icon: Icons.badge_rounded,
-                                textDirection: TextDirection.ltr,
-                              ),
-
-
-                              const SizedBox(height:12),
-
-
-                              buildTextField(
-                                controller: camelCountController,
-                                label: 'تعداد کل شترها',
-                                icon: Icons.format_list_numbered_rounded,
-                                keyboardType: TextInputType.number,
-                              ),
-
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: cardDecoration(),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SectionTitle(title: 'تنظیمات آنتن WiFi'),
-
-                              buildTextField(
-                                controller: wifiSsidController,
-                                label: 'نام WiFi آنتن',
-                                icon: Icons.wifi_rounded,
-                                textDirection: TextDirection.ltr,
-                              ),
-
-                              const SizedBox(height: 12),
-
-                              buildTextField(
-                                controller: wifiPasswordController,
-                                label: 'رمز WiFi آنتن',
-                                icon: Icons.lock_rounded,
-                                textDirection: TextDirection.ltr,
-                              ),
-
-                              const SizedBox(height: 12),
-
-                              buildTextField(
-                                controller: wifiWebSocketUrlController,
-                                label: 'آدرس WebSocket',
-                                icon: Icons.link_rounded,
-                                textDirection: TextDirection.ltr,
-                              ),
-
-                              const SizedBox(height: 8),
-
-                              const Text(
-                                'پیش‌فرض: ws://192.168.4.1:81/',
-                                style: TextStyle(
-                                  color: Colors.black54,
-                                  fontSize: 12,
-                                ),
-                              ),
-
-                              const SizedBox(height: 12),
-
-                              SwitchListTile(
-                                value: wifiAutoReconnect,
-                                onChanged: (value) {
-                                  setState(() {
-                                    wifiAutoReconnect = value;
-                                  });
-                                },
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text(
-                                  'اتصال مجدد خودکار',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                subtitle: const Text(
-                                  'اگر اتصال WebSocket قطع شد، برنامه دوباره تلاش کند وصل شود.',
-                                ),
-                                secondary: const Icon(Icons.sync_rounded),
-                              ),
-
-                              const SizedBox(height: 12),
-
-                              buildTextField(
-                                controller: locationNameController,
-                                label: 'نام محل پیش‌فرض دریافت',
-                                icon: Icons.place_rounded,
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: cardDecoration(),
-
-                          child: Column(
-
-                            crossAxisAlignment:
-                                CrossAxisAlignment.start,
-
-                            children: [
-
-                              const SectionTitle(
-                                title: 'شناسه دستگاه',
-                              ),
-
-
-                              buildTextField(
-                                controller: deviceIdController,
-                                label: 'Device ID',
-                                icon: Icons.phone_android_rounded,
-                                textDirection: TextDirection.ltr,
-                              ),
-
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: cardDecoration(),
-                          child: SwitchListTile(
-                            value: smsEnabled,
-                            onChanged: (value) {
-                              setState(() {
-                                smsEnabled = value;
-                              });
-                            },
-                            title: const Text(
-                              'پیامک فعال باشد',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            subtitle: const Text(
-                              'بعداً برای ارسال خلاصه و هشدار استفاده می‌شود.',
-                            ),
-                            secondary: const Icon(Icons.sms_rounded),
-                          ),
-                        ),
-                        const SizedBox(height: 18),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 52,
-                          child: ElevatedButton.icon(
-                            onPressed: isSaving ? null : saveSettings,
-                            icon: isSaving
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Icon(Icons.save_rounded),
-                            label: Text(
-                              isSaving ? 'در حال ذخیره...' : 'ذخیره تنظیمات',
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF008B62),
-                              foregroundColor: Colors.white,
-                              disabledBackgroundColor: Colors.grey.shade300,
-                              disabledForegroundColor: Colors.grey.shade600,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 48,
-                          child: OutlinedButton.icon(
-                            onPressed: resetSettings,
-                            icon: const Icon(Icons.restart_alt_rounded),
-                            label: const Text('بازگشت به تنظیمات پیش‌فرض'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const UnifiedSettingsPage();
 }
 
 class AntennaLogsPage extends StatefulWidget {
@@ -8444,7 +5383,7 @@ class AntennaLogCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
-            backgroundColor: color.withOpacity(0.12),
+            backgroundColor: color.withValues(alpha: 0.12),
             child: Icon(
               icon,
               color: color,
@@ -8666,7 +5605,7 @@ class MetricCard extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 22,
-            backgroundColor: color.withOpacity(0.12),
+            backgroundColor: color.withValues(alpha: 0.12),
             child: Icon(
               icon,
               color: color,
@@ -8749,7 +5688,7 @@ class ActionTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
+                    color: Colors.black.withValues(alpha: 0.08),
                     blurRadius: 10,
                     offset: const Offset(0, 5),
                   ),
@@ -8996,276 +5935,6 @@ class MiniInfo extends StatelessWidget {
   }
 }
 
-class AlertSummaryCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  const AlertSummaryCard({
-    super.key,
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 118,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-      decoration: cardDecoration(),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundColor: color.withOpacity(0.12),
-            child: Icon(
-              icon,
-              color: color,
-              size: 22,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 26,
-              height: 1,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 11,
-              height: 1.25,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class AlertCard extends StatelessWidget {
-  final AppAlert alert;
-
-  const AlertCard({super.key, required this.alert});
-
-  Color get color {
-    switch (alert.level) {
-      case AlertLevel.urgent:
-        return const Color(0xFFD32F2F);
-      case AlertLevel.warning:
-        return const Color(0xFFE87500);
-      case AlertLevel.info:
-        return const Color(0xFF086EBB);
-    }
-  }
-
-  IconData get icon {
-    switch (alert.type) {
-      case AlertType.forbiddenZone:
-        return Icons.warning_rounded;
-      case AlertType.routeExit:
-        return Icons.alt_route_rounded;
-      case AlertType.missingTag:
-        return Icons.sell_rounded;
-      case AlertType.lowBattery:
-        return Icons.battery_alert_rounded;
-      case AlertType.syncFailed:
-        return Icons.sync_problem_rounded;
-      case AlertType.antennaError:
-        return Icons.settings_input_antenna_rounded;
-      case AlertType.tagUnlocked:
-        return Icons.lock_open_rounded;
-    }
-  }
-
-  String get levelText {
-    switch (alert.level) {
-      case AlertLevel.urgent:
-        return 'فوری';
-      case AlertLevel.warning:
-        return 'هشدار';
-      case AlertLevel.info:
-        return 'اطلاع';
-    }
-  }
-
-  String get typeText {
-    switch (alert.type) {
-      case AlertType.forbiddenZone:
-        return 'محدوده ممنوع';
-      case AlertType.routeExit:
-        return 'خروج از مسیر';
-      case AlertType.missingTag:
-        return 'تگ مفقود';
-      case AlertType.lowBattery:
-        return 'باتری';
-      case AlertType.syncFailed:
-        return 'ارسال';
-      case AlertType.antennaError:
-        return 'دستگاه / GPS';
-      case AlertType.tagUnlocked:
-        return 'قفل تگ';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: cardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: color.withOpacity(0.12),
-                child: Icon(
-                  icon,
-                  color: color,
-                  size: 25,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      alert.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 17,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      alert.subtitle,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.black54,
-                        height: 1.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                alert.time,
-                style: const TextStyle(
-                  color: Colors.black54,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              AlertBadge(
-                icon: Icons.flag_rounded,
-                text: levelText,
-                color: color,
-              ),
-              AlertBadge(
-                icon: Icons.category_rounded,
-                text: typeText,
-                color: const Color(0xFF7B3FB3),
-              ),
-              AlertBadge(
-                icon: Icons.place_rounded,
-                text: alert.locationName,
-                color: const Color(0xFF086EBB),
-              ),
-              AlertBadge(
-                icon: alert.reviewed
-                    ? Icons.verified_rounded
-                    : Icons.pending_actions_rounded,
-                text: alert.reviewed ? 'اطلاع‌رسانی' : 'نیاز به بررسی',
-                color: alert.reviewed ? Colors.green : Colors.red,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-
-class AlertBadge extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  final Color color;
-
-  const AlertBadge({
-    super.key,
-    required this.icon,
-    required this.text,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 170),
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.09),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 16,
-            color: color,
-          ),
-          const SizedBox(width: 5),
-          Flexible(
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 11,
-                color: color,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-
-
 class ReportSummaryCard extends StatelessWidget {
   final String title;
   final String value;
@@ -9291,7 +5960,7 @@ class ReportSummaryCard extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 22,
-            backgroundColor: color.withOpacity(0.12),
+            backgroundColor: color.withValues(alpha: 0.12),
             child: Icon(icon, color: color),
           ),
           const SizedBox(width: 10),
@@ -9354,7 +6023,7 @@ class SyncInfoRow extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 17,
-            backgroundColor: color.withOpacity(0.12),
+            backgroundColor: color.withValues(alpha: 0.12),
             child: Icon(icon, color: color, size: 19),
           ),
           const SizedBox(width: 10),
@@ -9374,546 +6043,3 @@ class SyncInfoRow extends StatelessWidget {
   }
 }
 
-class SmsReportSettingsPage extends StatefulWidget {
-  const SmsReportSettingsPage({super.key});
-
-  @override
-  State<SmsReportSettingsPage> createState() => _SmsReportSettingsPageState();
-}
-
-class _SmsReportSettingsPageState extends State<SmsReportSettingsPage> {
-  bool isLoading = true;
-  bool isSendingTest = false;
-
-  SmsReportSettings settings = const SmsReportSettings();
-
-  final TextEditingController phoneController = TextEditingController();
-
-  final List<int> intervalOptions = const [
-    10,
-    15,
-    30,
-    60,
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    loadSettings();
-  }
-
-  @override
-  void dispose() {
-    phoneController.dispose();
-    super.dispose();
-  }
-
-
-
-
-  Future<void> loadSettings() async {
-    final loadedSettings = await SmsReportSettingsService.loadSettings();
-
-    if (!mounted) return;
-
-    setState(() {
-      settings = loadedSettings;
-      phoneController.text = loadedSettings.phoneNumber;
-      isLoading = false;
-    });
-  }
-
-
-
-
-  Future<void> saveSettings(SmsReportSettings newSettings) async {
-    settings = newSettings.copyWith(
-      phoneNumber: phoneController.text.trim(),
-    );
-
-    await SmsReportSettingsService.saveSettings(settings);
-    await SmsAutoSenderService.restart();
-
-    if (!mounted) return;
-
-    setState(() {});
-  }
-
-  Future<void> saveAndShowMessage() async {
-    await saveSettings(settings);
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('تنظیمات پیامک ذخیره شد.'),
-      ),
-    );
-  }
-
-  Future<void> sendTestSms() async {
-    await saveSettings(settings);
-
-    if (settings.phoneNumber.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('اول شماره مقصد را وارد کن.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    setState(() {
-      isSendingTest = true;
-    });
-
-    try {
-      final message = await SmsReportBuilderService.buildCurrentMessage(
-        settings,
-      );
-
-      await DirectSmsService.sendDirectSms(
-        phoneNumber: settings.phoneNumber,
-        message: message,
-      );
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('پیامک تستی ارسال شد.'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('خطا در ارسال پیامک: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      if (!mounted) return;
-
-      setState(() {
-        isSendingTest = false;
-      });
-    }
-  }
-
-  Future<void> showPreviewMessage() async {
-    await saveSettings(settings);
-
-    final message = await SmsReportBuilderService.buildCurrentMessage(
-      settings,
-    );
-
-    if (!mounted) return;
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('پیش‌نمایش پیامک'),
-          content: SingleChildScrollView(
-            child: Text(
-              message,
-              textDirection: TextDirection.rtl,
-              style: const TextStyle(height: 1.7),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Clipboard.setData(
-                  ClipboardData(text: message),
-                );
-
-                Navigator.of(context).pop();
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('متن پیامک کپی شد.'),
-                  ),
-                );
-              },
-              child: const Text('کپی متن'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: const Text('بستن'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget buildSwitchTile({
-    required String title,
-    required String subtitle,
-    required bool value,
-    required ValueChanged<bool> onChanged,
-  }) {
-    return SwitchListTile(
-      value: value,
-      activeColor: const Color(0xFF008B62),
-      title: Text(
-        title,
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ),
-      subtitle: Text(
-        subtitle,
-        style: const TextStyle(height: 1.5),
-      ),
-      onChanged: (value) async {
-        onChanged(value);
-        await saveSettings(settings);
-      },
-    );
-  }
-
-  Widget buildIntervalSelector() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: cardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SectionTitle(title: 'فاصله ارسال خودکار'),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: intervalOptions.map((minute) {
-              final selected = settings.intervalMinutes == minute;
-
-              return ChoiceChip(
-                selected: selected,
-                label: Text('هر $minute دقیقه'),
-                selectedColor: const Color(0xFFEAF8F2),
-                onSelected: (_) async {
-                  setState(() {
-                    settings = settings.copyWith(
-                      intervalMinutes: minute,
-                    );
-                  });
-
-                  await saveSettings(settings);
-                },
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'ارسال خودکار فعلاً وقتی برنامه باز است فعال می‌ماند.',
-            style: TextStyle(
-              color: Colors.black54,
-              height: 1.6,
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildStatusBox() {
-    return ValueListenableBuilder<String>(
-      valueListenable: SmsAutoSenderService.statusNotifier,
-      builder: (context, status, child) {
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: settings.enabled
-                ? const Color(0xFFEAF8F2)
-                : const Color(0xFFFFF3E0),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: settings.enabled
-                  ? const Color(0xFFC8EBDD)
-                  : const Color(0xFFFFCC80),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                settings.enabled
-                    ? Icons.sms_rounded
-                    : Icons.sms_failed_rounded,
-                color: settings.enabled
-                    ? const Color(0xFF008B62)
-                    : const Color(0xFFE87500),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  status,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    height: 1.5,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget buildContentOptions() {
-    return Container(
-      width: double.infinity,
-      decoration: cardDecoration(),
-      child: Column(
-        children: [
-          const SectionTitle(title: 'محتوای پیامک'),
-          buildSwitchTile(
-            title: 'تاریخ گزارش',
-            subtitle: 'نمایش روز و تاریخ در متن پیامک',
-            value: settings.includeDate,
-            onChanged: (value) {
-              setState(() {
-                settings = settings.copyWith(includeDate: value);
-              });
-            },
-          ),
-          buildSwitchTile(
-            title: 'تعداد شترهای دیده‌شده',
-            subtitle: 'تعداد تگ‌هایی که امروز دریافت شده‌اند',
-            value: settings.includeSeenCount,
-            onChanged: (value) {
-              setState(() {
-                settings = settings.copyWith(includeSeenCount: value);
-              });
-            },
-          ),
-          buildSwitchTile(
-            title: 'تعداد شترهای دیده‌نشده',
-            subtitle: 'شترهای فعال که امروز رکوردی نداشته‌اند',
-            value: settings.includeMissingCount,
-            onChanged: (value) {
-              setState(() {
-                settings = settings.copyWith(includeMissingCount: value);
-              });
-            },
-          ),
-          buildSwitchTile(
-            title: 'داخل محدوده مجاز',
-            subtitle: 'شترهای دیده‌شده داخل آغل، چراگاه، مسیر یا آبشخور',
-            value: settings.includeInsideAllowedCount,
-            onChanged: (value) {
-              setState(() {
-                settings = settings.copyWith(includeInsideAllowedCount: value);
-              });
-            },
-          ),
-          buildSwitchTile(
-            title: 'خارج یا غیرمجاز',
-            subtitle: 'شترهای خارج از محدوده مجاز یا داخل محدوده ممنوع',
-            value: settings.includeOutsideAllowedCount,
-            onChanged: (value) {
-              setState(() {
-                settings = settings.copyWith(includeOutsideAllowedCount: value);
-              });
-            },
-          ),
-          buildSwitchTile(
-            title: 'باتری ضعیف',
-            subtitle: 'تعداد شترهایی که باتری تگ آن‌ها ضعیف است',
-            value: settings.includeLowBatteryCount,
-            onChanged: (value) {
-              setState(() {
-                settings = settings.copyWith(includeLowBatteryCount: value);
-              });
-            },
-          ),
-          buildSwitchTile(
-            title: 'آخرین زمان دریافت',
-            subtitle: 'آخرین ساعت دریافت رکورد امروز',
-            value: settings.includeLastReceiveTime,
-            onChanged: (value) {
-              setState(() {
-                settings = settings.copyWith(includeLastReceiveTime: value);
-              });
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildMainSettings() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: cardDecoration(),
-      child: Column(
-        children: [
-          SwitchListTile(
-            value: settings.enabled,
-            activeColor: const Color(0xFF008B62),
-            title: const Text(
-              'ارسال خودکار پیامک',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: const Text(
-              'با فعال‌سازی، برنامه طبق تایمر تنظیم‌شده پیامک گزارش ارسال می‌کند.',
-              style: TextStyle(height: 1.5),
-            ),
-            onChanged: (value) async {
-              setState(() {
-                settings = settings.copyWith(enabled: value);
-              });
-
-              await saveSettings(settings);
-            },
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: phoneController,
-            keyboardType: TextInputType.phone,
-            textDirection: TextDirection.ltr,
-            decoration: InputDecoration(
-              labelText: 'شماره مقصد پیامک',
-              hintText: 'مثلاً 09123456789',
-              prefixIcon: const Icon(Icons.phone_rounded),
-              filled: true,
-              fillColor: const Color(0xFFF5F7FA),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide.none,
-              ),
-            ),
-            onChanged: (value) {
-              settings = settings.copyWith(
-                phoneNumber: value.trim(),
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          SwitchListTile(
-            value: settings.sendOnlyIfHasProblem,
-            activeColor: const Color(0xFF008B62),
-            title: const Text(
-              'ارسال فقط در صورت وجود مشکل',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: const Text(
-              'مثلاً شتر دیده‌نشده، خارج محدوده یا باتری ضعیف',
-              style: TextStyle(height: 1.5),
-            ),
-            onChanged: (value) async {
-              setState(() {
-                settings = settings.copyWith(
-                  sendOnlyIfHasProblem: value,
-                );
-              });
-
-              await saveSettings(settings);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildActionButtons() {
-    return Column(
-      children: [
-        SizedBox(
-          width: double.infinity,
-          height: 50,
-          child: ElevatedButton.icon(
-            onPressed: saveAndShowMessage,
-            icon: const Icon(Icons.save_rounded),
-            label: const Text('ذخیره تنظیمات'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF003B7A),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: showPreviewMessage,
-                icon: const Icon(Icons.remove_red_eye_rounded),
-                label: const Text('پیش‌نمایش'),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: isSendingTest ? null : sendTestSms,
-                icon: isSendingTest
-                    ? const SizedBox(
-                        width: 17,
-                        height: 17,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.send_rounded),
-                label: const Text('ارسال تستی'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF008B62),
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: const Color(0xFFF5F7FA),
-        body: Column(
-          children: [
-            const AppHeader(title: 'تنظیمات پیامک'),
-            Expanded(
-              child: isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : SingleChildScrollView(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        children: [
-                          buildStatusBox(),
-                          const SizedBox(height: 12),
-                          buildMainSettings(),
-                          const SizedBox(height: 12),
-                          buildIntervalSelector(),
-                          const SizedBox(height: 12),
-                          buildContentOptions(),
-                          const SizedBox(height: 14),
-                          buildActionButtons(),
-                          const SizedBox(height: 30),
-                        ],
-                      ),
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

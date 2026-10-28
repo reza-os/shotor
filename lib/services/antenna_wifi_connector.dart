@@ -27,6 +27,19 @@ class AntennaWifiConnector {
     return result == true;
   }
 
+  /// Read connected Wi-Fi SSID if Android/permissions allow it.
+  /// Android never exposes the saved Wi-Fi password to applications.
+  static Future<String?> currentWifiSsid() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      final value = await _channel.invokeMethod<String>('getCurrentWifiSsid');
+      if (value == null || value.isEmpty || value == '<unknown ssid>') return null;
+      return value;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<void> openWifiPanel() async {
     if (!Platform.isAndroid) {
       return;

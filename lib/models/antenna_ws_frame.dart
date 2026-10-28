@@ -34,11 +34,11 @@ class AntennaWsFrame {
   }
 
   bool get isControlMessage {
-    return type != null;
+    return type != null && !hasRequiredDataFields;
   }
 
   bool get isDataMessage {
-    return type == null && messageId != null;
+    return messageId != null && hasRequiredDataFields;
   }
 
   String? get messageId {

@@ -2,6 +2,8 @@ import '../models/area_zone.dart';
 import '../models/camel_profile.dart';
 import '../models/management_report.dart';
 import '../models/tag_record.dart';
+import '../models/polygon_zone.dart';
+import '../utils/jalali_date_ui.dart';
 import '../utils/iran_time.dart';
 import 'zone_check_service.dart';
 
@@ -9,6 +11,7 @@ class ManagementReportService {
   static ManagementReport buildDailyReport({
     required List<TagRecord> records,
     required List<AreaZone> zones,
+    List<PolygonZone> polygons = const [],
     required DateTime date,
     List<CamelProfile> profiles = const [],
     int slotMinutes = 60,
@@ -60,6 +63,7 @@ class ManagementReportService {
         profile: profileByTag[tagId],
         slots: slots,
         zones: zones,
+        polygons: polygons,
         fallbackDate: date,
         slotMinutes: slotMinutes,
       );
@@ -71,6 +75,7 @@ class ManagementReportService {
         records: recordsByTag[tagId] ?? [],
         profile: profileByTag[tagId],
         zones: zones,
+        polygons: polygons,
         fallbackDate: date,
         maxGapMinutes: maxGapMinutes,
       );
@@ -82,6 +87,7 @@ class ManagementReportService {
         records: recordsByTag[tagId] ?? [],
         profile: profileByTag[tagId],
         zones: zones,
+        polygons: polygons,
         fallbackDate: date,
       );
     }).toList();
@@ -102,6 +108,7 @@ class ManagementReportService {
       final result = zoneResultForRecord(
         record: record,
         zones: zones,
+        polygons: polygons,
       );
 
       return result?.isInsideForbiddenZone == true;
@@ -111,6 +118,7 @@ class ManagementReportService {
       final result = zoneResultForRecord(
         record: record,
         zones: zones,
+        polygons: polygons,
       );
 
       return result?.isOutsideAllowedZones == true;
@@ -196,6 +204,7 @@ class ManagementReportService {
     required CamelProfile? profile,
     required List<ReportTimeSlot> slots,
     required List<AreaZone> zones,
+    List<PolygonZone> polygons = const [],
     required DateTime fallbackDate,
     required int slotMinutes,
   }) {
@@ -217,17 +226,14 @@ class ManagementReportService {
 
       if (dateTime == null) continue;
 
-      final dayStart = DateTime(
-        dateTime.year,
-        dateTime.month,
-        dateTime.day,
-      );
-
-      final diffMinutes = dateTime.difference(dayStart).inMinutes;
-
-      if (diffMinutes < 0) continue;
-
-      final slotIndex = diffMinutes ~/ slotMinutes;
+      // recordDateTime is already an Iran wall-clock value. For ISO values
+      // with Z/offset, IranTime.wallClock preserves UTC DateTime.isUtc while
+      // adjusting its clock fields. Subtracting a *local* midnight would
+      // silently shift the time-slot by the device's UTC offset (e.g. +03:30).
+      // Bucket by wall-clock hour/minute instead so time and location reports
+      // use the same displayed clock regardless of the device time zone.
+      final minutesSinceMidnight = dateTime.hour * 60 + dateTime.minute;
+      final slotIndex = minutesSinceMidnight ~/ slotMinutes;
 
       if (slotIndex < 0 || slotIndex >= slots.length) continue;
 
@@ -236,6 +242,7 @@ class ManagementReportService {
       slotLocations[slot.label] = locationTextForRecord(
         record: record,
         zones: zones,
+        polygons: polygons,
       );
     }
 
@@ -252,6 +259,7 @@ class ManagementReportService {
     required List<TagRecord> records,
     required CamelProfile? profile,
     required List<AreaZone> zones,
+    List<PolygonZone> polygons = const [],
     required DateTime fallbackDate,
     required int maxGapMinutes,
   }) {
@@ -310,6 +318,7 @@ class ManagementReportService {
       final location = locationTextForRecord(
         record: current,
         zones: zones,
+        polygons: polygons,
       );
 
       if (diffMinutes <= maxGapMinutes) {
@@ -337,6 +346,7 @@ class ManagementReportService {
     required List<TagRecord> records,
     required CamelProfile? profile,
     required List<AreaZone> zones,
+    List<PolygonZone> polygons = const [],
     required DateTime fallbackDate,
   }) {
     final camelInfo = camelInfoFor(
@@ -377,6 +387,7 @@ class ManagementReportService {
     final result = zoneResultForRecord(
       record: lastRecord,
       zones: zones,
+      polygons: polygons,
     );
 
     var statusText = 'عادی';
@@ -409,6 +420,7 @@ class ManagementReportService {
       lastLocationText: locationTextForRecord(
         record: lastRecord,
         zones: zones,
+        polygons: polygons,
       ),
       batteryText: lastRecord.batteryText,
       lockText: lastRecord.lockText,
@@ -420,42 +432,47 @@ class ManagementReportService {
   static ZoneCheckResult? zoneResultForRecord({
     required TagRecord record,
     required List<AreaZone> zones,
+    List<PolygonZone> polygons = const [],
   }) {
     if (record.latitude == null || record.longitude == null) {
       return null;
     }
 
-    if (zones.isEmpty) {
+    if (zones.isEmpty && polygons.isEmpty) {
       return null;
     }
 
     return ZoneCheckService.checkRecord(
       record: record,
       zones: zones,
+      polygons: polygons,
     );
   }
 
   static String locationTextForRecord({
     required TagRecord record,
     required List<AreaZone> zones,
+    List<PolygonZone> polygons = const [],
   }) {
     if (record.latitude == null || record.longitude == null) {
       return 'بدون GPS';
     }
 
-    if (zones.isEmpty) {
+    if (zones.isEmpty && polygons.isEmpty) {
       return 'بدون محدوده';
     }
 
     final result = ZoneCheckService.checkRecord(
       record: record,
       zones: zones,
+      polygons: polygons,
     );
 
     if (result.isInsideForbiddenZone) {
-      final names = result.forbiddenZones
-          .map((zone) => zone.name)
-          .join('، ');
+      final names = [
+        ...result.forbiddenZones.map((zone) => zone.name),
+        ...result.forbiddenPolygonNames,
+      ].join('، ');
 
       return 'ممنوعه: $names';
     }
@@ -464,10 +481,8 @@ class ManagementReportService {
       return 'خارج محدوده مجاز';
     }
 
-    if (result.insideZones.isNotEmpty) {
-      return result.insideZones
-          .map((zone) => zone.name)
-          .join('، ');
+    if (result.insideZones.isNotEmpty || result.allowedPolygonNames.isNotEmpty) {
+      return result.insideZonesText;
     }
 
     return 'خارج محدوده‌ها';
@@ -552,8 +567,7 @@ class ManagementReportService {
   }
 
   static String dateTimeText(DateTime dateTime) {
-    return '${dateTime.year}/${twoDigit(dateTime.month)}/${twoDigit(dateTime.day)} '
-        '${twoDigit(dateTime.hour)}:${twoDigit(dateTime.minute)}';
+    return JalaliDateUi.dateTime(dateTime);
   }
 
   static String minutesText(int minutes) {

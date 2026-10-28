@@ -1,9 +1,13 @@
+/// SMS report delivery preferences. One-off sending is an explicit UI action,
+/// never an automatic schedule. Legacy minute intervals are not re-enabled.
 class SmsReportSettings {
   final bool enabled;
   final String phoneNumber;
-  final int intervalMinutes;
+  final String schedule; // now | daily | weekly
+  final int hour; // Iran wall-clock
+  final int minute;
+  final int weekday; // 1=Mon .. 7=Sun (DateTime convention)
   final bool sendOnlyIfHasProblem;
-
   final bool includeDate;
   final bool includeSeenCount;
   final bool includeMissingCount;
@@ -15,7 +19,10 @@ class SmsReportSettings {
   const SmsReportSettings({
     this.enabled = false,
     this.phoneNumber = '',
-    this.intervalMinutes = 10,
+    this.schedule = 'now',
+    this.hour = 9,
+    this.minute = 0,
+    this.weekday = DateTime.saturday,
     this.sendOnlyIfHasProblem = false,
     this.includeDate = true,
     this.includeSeenCount = true,
@@ -26,62 +33,57 @@ class SmsReportSettings {
     this.includeLastReceiveTime = true,
   });
 
-  SmsReportSettings copyWith({
-    bool? enabled,
-    String? phoneNumber,
-    int? intervalMinutes,
-    bool? sendOnlyIfHasProblem,
-    bool? includeDate,
-    bool? includeSeenCount,
-    bool? includeMissingCount,
-    bool? includeInsideAllowedCount,
-    bool? includeOutsideAllowedCount,
-    bool? includeLowBatteryCount,
-    bool? includeLastReceiveTime,
-  }) {
-    return SmsReportSettings(
-      enabled: enabled ?? this.enabled,
-      phoneNumber: phoneNumber ?? this.phoneNumber,
-      intervalMinutes: intervalMinutes ?? this.intervalMinutes,
-      sendOnlyIfHasProblem:
-          sendOnlyIfHasProblem ?? this.sendOnlyIfHasProblem,
-      includeDate: includeDate ?? this.includeDate,
-      includeSeenCount: includeSeenCount ?? this.includeSeenCount,
-      includeMissingCount: includeMissingCount ?? this.includeMissingCount,
-      includeInsideAllowedCount:
-          includeInsideAllowedCount ?? this.includeInsideAllowedCount,
-      includeOutsideAllowedCount:
-          includeOutsideAllowedCount ?? this.includeOutsideAllowedCount,
-      includeLowBatteryCount:
-          includeLowBatteryCount ?? this.includeLowBatteryCount,
-      includeLastReceiveTime:
-          includeLastReceiveTime ?? this.includeLastReceiveTime,
-    );
-  }
+  bool get scheduled => enabled && schedule != 'now';
+  bool get validSchedule => schedule == 'now' || schedule == 'daily' || schedule == 'weekly';
 
-  Map<String, dynamic> toJson() {
-    return {
-      'enabled': enabled,
-      'phoneNumber': phoneNumber,
-      'intervalMinutes': intervalMinutes,
-      'sendOnlyIfHasProblem': sendOnlyIfHasProblem,
-      'includeDate': includeDate,
-      'includeSeenCount': includeSeenCount,
-      'includeMissingCount': includeMissingCount,
-      'includeInsideAllowedCount': includeInsideAllowedCount,
-      'includeOutsideAllowedCount': includeOutsideAllowedCount,
-      'includeLowBatteryCount': includeLowBatteryCount,
-      'includeLastReceiveTime': includeLastReceiveTime,
-    };
-  }
+  SmsReportSettings copyWith({
+    bool? enabled, String? phoneNumber, String? schedule,
+    int? hour, int? minute, int? weekday,
+    bool? sendOnlyIfHasProblem, bool? includeDate, bool? includeSeenCount,
+    bool? includeMissingCount, bool? includeInsideAllowedCount,
+    bool? includeOutsideAllowedCount, bool? includeLowBatteryCount,
+    bool? includeLastReceiveTime,
+  }) => SmsReportSettings(
+    enabled: enabled ?? this.enabled,
+    phoneNumber: phoneNumber ?? this.phoneNumber,
+    schedule: schedule ?? this.schedule,
+    hour: hour ?? this.hour,
+    minute: minute ?? this.minute,
+    weekday: weekday ?? this.weekday,
+    sendOnlyIfHasProblem: sendOnlyIfHasProblem ?? this.sendOnlyIfHasProblem,
+    includeDate: includeDate ?? this.includeDate,
+    includeSeenCount: includeSeenCount ?? this.includeSeenCount,
+    includeMissingCount: includeMissingCount ?? this.includeMissingCount,
+    includeInsideAllowedCount: includeInsideAllowedCount ?? this.includeInsideAllowedCount,
+    includeOutsideAllowedCount: includeOutsideAllowedCount ?? this.includeOutsideAllowedCount,
+    includeLowBatteryCount: includeLowBatteryCount ?? this.includeLowBatteryCount,
+    includeLastReceiveTime: includeLastReceiveTime ?? this.includeLastReceiveTime,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled, 'phoneNumber': phoneNumber, 'schedule': schedule,
+    'hour': hour, 'minute': minute, 'weekday': weekday,
+    'sendOnlyIfHasProblem': sendOnlyIfHasProblem,
+    'includeDate': includeDate, 'includeSeenCount': includeSeenCount,
+    'includeMissingCount': includeMissingCount,
+    'includeInsideAllowedCount': includeInsideAllowedCount,
+    'includeOutsideAllowedCount': includeOutsideAllowedCount,
+    'includeLowBatteryCount': includeLowBatteryCount,
+    'includeLastReceiveTime': includeLastReceiveTime,
+  };
 
   factory SmsReportSettings.fromJson(Map<String, dynamic> json) {
+    final mode = json['schedule']?.toString() ?? 'now';
+    int parseInt(String k, int def) => json[k] is int
+        ? json[k] as int : int.tryParse(json[k]?.toString() ?? '') ?? def;
     return SmsReportSettings(
-      enabled: json['enabled'] == true,
+      // Legacy minute timers must not silently become daily sends.
+      enabled: json['schedule'] != null && json['enabled'] == true,
       phoneNumber: json['phoneNumber']?.toString() ?? '',
-      intervalMinutes: json['intervalMinutes'] is int
-          ? json['intervalMinutes']
-          : int.tryParse(json['intervalMinutes']?.toString() ?? '') ?? 10,
+      schedule: ['now', 'daily', 'weekly'].contains(mode) ? mode : 'now',
+      hour: parseInt('hour', 9).clamp(0, 23),
+      minute: parseInt('minute', 0).clamp(0, 59),
+      weekday: parseInt('weekday', DateTime.saturday).clamp(1, 7),
       sendOnlyIfHasProblem: json['sendOnlyIfHasProblem'] == true,
       includeDate: json['includeDate'] != false,
       includeSeenCount: json['includeSeenCount'] != false,

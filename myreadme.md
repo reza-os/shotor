@@ -1,5 +1,14 @@
 set PUB_HOSTED_URL=https://pub.flutter-io.cn
 set FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn
+
+set PUB_HOSTED_URL=https://mirror.sjtu.edu.cn/dart-pub
+set FLUTTER_STORAGE_BASE_URL=https://mirror.sjtu.edu.cn
+
+
+set PUB_HOSTED_URL=https://mirrors.tuna.tsinghua.edu.cn/dart-pub
+set FLUTTER_STORAGE_BASE_URL=https://mirrors.tuna.tsinghua.edu.cn/flutter
+
+
 flutter pub get
 flutter build apk --release
 
@@ -31,3 +40,7 @@ git push origin dev
 git push origin myFeature
 -
 And you'll see it how you want it.
+
+
+
+   

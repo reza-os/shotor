@@ -15,6 +15,10 @@ class AntennaInboxMessage {
     this.rxTime,
     this.rxTimeValid,
     this.rxTimeSource,
+    this.phoneLatitude,
+    this.phoneLongitude,
+    this.phoneAccuracy,
+    this.phoneFixAt,
     this.processed = false,
     this.processedAt,
     this.processingError,
@@ -37,6 +41,12 @@ class AntennaInboxMessage {
   final String? rxTime;
   final bool? rxTimeValid;
   final String? rxTimeSource;
+
+  // Snapshot of PHONE GPS at WebSocket reception (never recomputed on replay).
+  final double? phoneLatitude;
+  final double? phoneLongitude;
+  final double? phoneAccuracy;
+  final DateTime? phoneFixAt;
 
   final String rawJson;
 
@@ -61,8 +71,12 @@ class AntennaInboxMessage {
       'rx_time': rxTime,
       'rx_time_valid': rxTimeValid == null ? null : (rxTimeValid! ? 1 : 0),
       'rx_time_source': rxTimeSource,
+      'phone_latitude': phoneLatitude,
+      'phone_longitude': phoneLongitude,
+      'phone_accuracy': phoneAccuracy,
+      'phone_fix_at': phoneFixAt?.toUtc().toIso8601String(),
       'raw_json': rawJson,
-      'received_at_app': receivedAtApp.toIso8601String(),
+      'received_at_app': receivedAtApp.toUtc().toIso8601String(),
       'processed': processed ? 1 : 0,
       'processed_at': processedAt?.toIso8601String(),
       'processing_error': processingError,
@@ -86,6 +100,11 @@ class AntennaInboxMessage {
           ? null
           : (map['rx_time_valid'] as int) == 1,
       rxTimeSource: map['rx_time_source'] as String?,
+      phoneLatitude: (map['phone_latitude'] as num?)?.toDouble(),
+      phoneLongitude: (map['phone_longitude'] as num?)?.toDouble(),
+      phoneAccuracy: (map['phone_accuracy'] as num?)?.toDouble(),
+      phoneFixAt: map['phone_fix_at'] == null ? null
+          : DateTime.tryParse(map['phone_fix_at'] as String),
       rawJson: map['raw_json'] as String,
       receivedAtApp: DateTime.parse(map['received_at_app'] as String),
       processed: (map['processed'] as int) == 1,
@@ -100,6 +119,10 @@ class AntennaInboxMessage {
     bool? processed,
     DateTime? processedAt,
     String? processingError,
+    double? phoneLatitude,
+    double? phoneLongitude,
+    double? phoneAccuracy,
+    DateTime? phoneFixAt,
   }) {
     return AntennaInboxMessage(
       messageId: messageId,
@@ -115,6 +138,10 @@ class AntennaInboxMessage {
       rxTime: rxTime,
       rxTimeValid: rxTimeValid,
       rxTimeSource: rxTimeSource,
+      phoneLatitude: phoneLatitude ?? this.phoneLatitude,
+      phoneLongitude: phoneLongitude ?? this.phoneLongitude,
+      phoneAccuracy: phoneAccuracy ?? this.phoneAccuracy,
+      phoneFixAt: phoneFixAt ?? this.phoneFixAt,
       rawJson: rawJson,
       receivedAtApp: receivedAtApp,
       processed: processed ?? this.processed,

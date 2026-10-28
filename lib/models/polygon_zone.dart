@@ -13,6 +13,7 @@ class PolygonZone {
   final String name;
   final PolygonZoneType type;
   final List<GeoPoint> points;
+  final List<List<GeoPoint>> holes;
   final bool isActive;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -22,6 +23,7 @@ class PolygonZone {
     required this.name,
     required this.type,
     required this.points,
+    this.holes = const [],
     required this.isActive,
     required this.createdAt,
     required this.updatedAt,
@@ -46,6 +48,11 @@ class PolygonZone {
               .map(GeoPoint.fromMap)
               .toList()
           : <GeoPoint>[],
+      holes: (map['holes'] is List)
+          ? (map['holes'] as List).whereType<List>().map((ring) => ring
+              .whereType<Map<String, dynamic>>()
+              .map(GeoPoint.fromMap).toList()).toList()
+          : const [],
       isActive: map['isActive'] ?? true,
       createdAt: DateTime.tryParse(
             map['createdAt'] ?? '',
@@ -64,6 +71,7 @@ class PolygonZone {
       'name': name,
       'type': polygonZoneTypeToString(type),
       'points': points.map((e) => e.toMap()).toList(),
+      'holes': holes.map((ring) => ring.map((e) => e.toMap()).toList()).toList(),
       'isActive': isActive,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
@@ -75,6 +83,7 @@ class PolygonZone {
     String? name,
     PolygonZoneType? type,
     List<GeoPoint>? points,
+    List<List<GeoPoint>>? holes,
     bool? isActive,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -84,6 +93,7 @@ class PolygonZone {
       name: name ?? this.name,
       type: type ?? this.type,
       points: points ?? this.points,
+      holes: holes ?? this.holes,
       isActive: isActive ?? this.isActive,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

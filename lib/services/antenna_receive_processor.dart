@@ -57,8 +57,10 @@ class AntennaReceiveProcessor {
     required String jsonText,
     required String locationName,
     bool skipDuplicateCheck = false,
-    // Queued ESP packets describe a past event; phone GPS is not its location.
+    // Legacy/manual input can capture GPS directly. ESP Inbox instead passes
+    // the GPS fix captured at WebSocket arrival, never at delayed processing.
     bool capturePhoneLocation = true,
+    AppLocationResult? phoneLocationAtReception,
     Future<void> Function(TagRecord record)? persistRecord,
     void Function()? onLocationStarted,
     void Function(AppLocationResult result)? onLocationFinished,
@@ -104,32 +106,32 @@ class AntennaReceiveProcessor {
         );
       }
 
-      AppLocationResult? locationResult;
-      var finalLocationName = locationName;
-
-      if (capturePhoneLocation) {
-        // Used only by explicit/manual input. Never used for the ESP backlog.
+      AppLocationResult? locationResult = phoneLocationAtReception;
+      if (locationResult == null && capturePhoneLocation) {
         onLocationStarted?.call();
         locationResult = await LocationService.getCurrentLocation();
         onLocationFinished?.call(locationResult);
-        if (locationResult.success) {
-          finalLocationName = '$locationName + GPS گوشی';
-        } else {
-          finalLocationName = '$locationName بدون GPS';
-        }
-      } else {
-        // There is no GPS coordinate in the ESP NRF24 frame. A later phone
-        // location must not be presented as the camel position at event time.
-        finalLocationName = '$locationName (موقعیت رویداد نامشخص)';
       }
+
+      final phoneGpsValid = locationResult?.success == true &&
+          locationResult?.latitude != null &&
+          locationResult?.longitude != null;
+      final deviceGpsValid = payload.latitude != null && payload.longitude != null;
+      final finalLocationName = phoneGpsValid
+          ? '$locationName (GPS گوشی هنگام دریافت)'
+          : deviceGpsValid
+              ? '$locationName (GPS دستگاه)'
+              : '$locationName (بدون GPS معتبر)';
 
       final record = payload.toTagRecord(
         locationName: finalLocationName,
         camelNo: camelNo,
         camelName: camelName,
-        latitude: locationResult?.latitude,
-        longitude: locationResult?.longitude,
-        accuracy: locationResult?.accuracy,
+        latitude: phoneGpsValid ? locationResult!.latitude : null,
+        longitude: phoneGpsValid ? locationResult!.longitude : null,
+        accuracy: phoneGpsValid ? locationResult!.accuracy : null,
+        preferPhoneGps: phoneGpsValid,
+        phoneGpsCapturedAt: locationResult?.capturedAt,
       );
 
       if (persistRecord == null) {
@@ -146,7 +148,9 @@ class AntennaReceiveProcessor {
           title: 'رکورد جدید ذخیره شد',
           message: '${record.camelName} / ${record.tagId} / ${record.batteryText}',
         );
-        await _createAlertsForRecord(record);
+        // Live geofence, lock and battery states are computed from tag_records.
+        // The old Alerts page was removed; avoid writing one large JSON
+        // preferences list for every incoming ESP packet.
       } catch (error, stack) {
         developer.log(
           'Post-save antenna effects failed: $error',
@@ -165,10 +169,8 @@ class AntennaReceiveProcessor {
         locationResult: locationResult,
       );
     } catch (e) {
-      await _createInvalidJsonAlert(
-        error: e,
-        jsonText: cleanJsonText,
-      );
+      // Invalid packets are recorded in the bounded antenna log.
+      // No legacy alert-list write is needed.
 
       await AntennaLogService.addLog(
         type: AntennaLogType.invalidJson,

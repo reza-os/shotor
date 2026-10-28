@@ -420,7 +420,7 @@ class _PolygonZoneFormPageState extends State<PolygonZoneFormPage> {
         border: Border.all(
           color: inside
               ? Colors.black12
-              : Colors.red.withOpacity(0.5),
+              : Colors.red.withValues(alpha: 0.5),
         ),
       ),
       child: Row(

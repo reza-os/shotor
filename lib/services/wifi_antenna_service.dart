@@ -24,13 +24,17 @@ class WifiAntennaService {
     return _jsonController.stream;
   }
 
+  /// Pause at the source websocket, not just the broadcast UI stream.
+  /// Without this, a paused broadcast subscriber still queues inbound
+  /// packets and can grow without bounds during high-rate reception.
+  void pauseReading() => _subscription?.pause();
+  void resumeReading() => _subscription?.resume();
+
    Stream<void> get disconnectStream {
       return _disconnectController.stream;
     }
 
-  bool get isConnected {
-    return _socket != null;
-  }
+  bool get isConnected => _socket?.readyState == WebSocket.open;
 
   String get connectedDeviceName {
     if (!isConnected) {
@@ -113,6 +117,7 @@ class WifiAntennaService {
     _subscription = socket.listen(
       _onMessage,
       onError: (error) {
+        if (identical(_socket, socket)) _socket = null;
         _jsonController.addError(error);
 
         if (!_disconnectController.isClosed) {
@@ -120,8 +125,10 @@ class WifiAntennaService {
         }
       },
       onDone: () {
-        _socket = null;
-        _subscription = null;
+        if (identical(_socket, socket)) {
+          _socket = null;
+          _subscription = null;
+        }
 
         if (!_disconnectController.isClosed) {
           _disconnectController.add(null);
@@ -145,41 +152,47 @@ class WifiAntennaService {
       return;
     }
 
+    // Prevent malformed or endless packets from growing process memory.
+    if (_buffer.length + text.length > 262144) {
+      _buffer = '';
+      _jsonController.addError(const FormatException('ESP packet exceeds 256 KiB'));
+      return;
+    }
     _buffer += text;
-
     _extractJsonMessages();
   }
 
+  /// WebSocket frames usually carry a single JSON object, but can contain
+  /// multiple concatenated objects or embedded JSON objects (for GPS data).
+  /// String contents and escaped quotes must not terminate a packet.
   void _extractJsonMessages() {
-    while (true) {
-      final startIndex = _buffer.indexOf('{');
-
-      if (startIndex == -1) {
-        if (_buffer.length > 1000) {
-          _buffer = '';
+    while (_buffer.isNotEmpty) {
+      final start = _buffer.indexOf('{');
+      if (start < 0) { _buffer = ''; return; }
+      if (start > 0) _buffer = _buffer.substring(start);
+      var depth = 0;
+      var quoted = false;
+      var escaped = false;
+      var end = -1;
+      for (var i = 0; i < _buffer.length; i++) {
+        final char = _buffer[i];
+        if (quoted) {
+          if (escaped) { escaped = false; continue; }
+          if (char.codeUnitAt(0) == 92) { escaped = true; continue; }
+          if (char == '"') quoted = false;
+          continue;
         }
-
-        return;
-      }
-
-      final endIndex = _buffer.indexOf('}', startIndex);
-
-      if (endIndex == -1) {
-        if (startIndex > 0) {
-          _buffer = _buffer.substring(startIndex);
+        if (char == '"') { quoted = true; continue; }
+        if (char == '{') depth++;
+        if (char == '}') {
+          depth--;
+          if (depth == 0) { end = i; break; }
         }
-
-        return;
       }
-
-      final jsonText = _buffer.substring(
-        startIndex,
-        endIndex + 1,
-      );
-
-      _buffer = _buffer.substring(endIndex + 1);
-
-      _jsonController.add(jsonText.trim());
+      if (end < 0) return;
+      final complete = _buffer.substring(0, end + 1);
+      _buffer = _buffer.substring(end + 1);
+      _jsonController.add(complete);
     }
   }
 

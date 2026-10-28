@@ -1,3 +1,4 @@
+import 'map_data_events.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -174,6 +175,7 @@ class CamelDetailService {
         data,
         conflictAlgorithm: ConflictAlgorithm.abort,
       );
+      MapDataEvents.changed();
 
       return;
     }
@@ -194,6 +196,21 @@ class CamelDetailService {
       where: 'tagId = ?',
       whereArgs: [detail.tagId],
     );
+    MapDataEvents.changed();
+  }
+
+  /// A single database transaction for restored details. Unrelated rows remain.
+  static Future<void> restoreImportedDetails(List<CamelDetail> details) async {
+    if (details.isEmpty) return;
+    final db = await database;
+    await db.transaction((txn) async {
+      for (final detail in details) {
+        final map = detail.toMap()..remove('id');
+        await txn.insert(tableName, map,
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+    MapDataEvents.changed();
   }
 
   static Future<void> savePhotoPath({
@@ -235,6 +252,7 @@ class CamelDetailService {
       where: 'tagId = ?',
       whereArgs: [tagId],
     );
+    MapDataEvents.changed();
   }
 
   static Future<int> countDetails() async {

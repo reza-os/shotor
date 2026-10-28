@@ -24,8 +24,13 @@ class DirectSmsService {
   static Future<void> sendDirectSms({
     required String phoneNumber,
     required String message,
+    bool askForPermission = true,
   }) async {
-    final cleanPhone = phoneNumber.trim();
+    final cleanPhone = phoneNumber.trim()
+        .replaceAllMapped(RegExp(r'[۰-۹]'),
+            (match) => '0123456789'['۰۱۲۳۴۵۶۷۸۹'.indexOf(match.group(0)!)] )
+        .replaceAllMapped(RegExp(r'[٠-٩]'),
+            (match) => '0123456789'['٠١٢٣٤٥٦٧٨٩'.indexOf(match.group(0)!)] );
     final cleanMessage = message.trim();
 
     if (cleanPhone.isEmpty) {
@@ -38,7 +43,7 @@ class DirectSmsService {
 
     var hasPermission = await hasSmsPermission();
 
-    if (!hasPermission) {
+    if (!hasPermission && askForPermission) {
       hasPermission = await requestSmsPermission();
     }
 
@@ -47,13 +52,14 @@ class DirectSmsService {
     }
 
     try {
-      await _channel.invokeMethod<bool>(
+      final submitted = await _channel.invokeMethod<bool>(
         'sendSms',
         {
           'phoneNumber': cleanPhone,
           'message': cleanMessage,
         },
       );
+      if (submitted != true) throw Exception('درخواست ارسال پیامک تأیید نشد.');
     } on PlatformException catch (e) {
       throw Exception(e.message ?? e.code);
     }

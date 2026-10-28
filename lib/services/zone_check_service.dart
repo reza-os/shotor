@@ -2,11 +2,15 @@ import 'dart:math' as math;
 
 import '../models/area_zone.dart';
 import '../models/tag_record.dart';
+import '../models/polygon_zone.dart';
+import 'geofence_geometry.dart';
 
 class ZoneCheckResult {
   final TagRecord record;
   final List<AreaZone> insideZones;
   final List<AreaZone> forbiddenZones;
+  final List<String> allowedPolygonNames;
+  final List<String> forbiddenPolygonNames;
   final bool hasGps;
   final bool hasAllowedZones;
   final bool isOutsideAllowedZones;
@@ -15,26 +19,32 @@ class ZoneCheckResult {
     required this.record,
     required this.insideZones,
     required this.forbiddenZones,
+    this.allowedPolygonNames = const [],
+    this.forbiddenPolygonNames = const [],
     required this.hasGps,
     required this.hasAllowedZones,
     required this.isOutsideAllowedZones,
   });
 
   bool get isInsideForbiddenZone {
-    return forbiddenZones.isNotEmpty;
+    return forbiddenZones.isNotEmpty || forbiddenPolygonNames.isNotEmpty;
   }
 
   String get insideZonesText {
     if (!hasGps) return 'GPS ثبت نشده';
-    if (insideZones.isEmpty) return 'خارج از محدوده‌های تعریف‌شده';
-
-    return insideZones.map((zone) => zone.name).join('، ');
+    final names = [...insideZones.map((zone) => zone.name),
+      ...allowedPolygonNames, ...forbiddenPolygonNames];
+    if (names.isEmpty) return 'خارج از محدوده‌های تعریف‌شده';
+    return names.toSet().join('، ');
   }
 }
 
 class ZoneCheckService {
   static bool recordHasGps(TagRecord record) {
-    return record.latitude != null && record.longitude != null;
+    final lat = record.latitude;
+    final lon = record.longitude;
+    return lat != null && lon != null && lat.isFinite && lon.isFinite &&
+        lat.abs() <= 90 && lon.abs() <= 180 && !(lat == 0 && lon == 0);
   }
 
   static bool isAllowedZone(AreaZone zone) {
@@ -92,8 +102,18 @@ class ZoneCheckService {
   static ZoneCheckResult checkRecord({
     required TagRecord record,
     required List<AreaZone> zones,
+    List<PolygonZone> polygons = const [],
   }) {
     final activeZones = zones.where((zone) => zone.isActive).toList();
+    final activePolygons = polygons.where((z) => z.isActive && z.isValid).toList();
+    final containingPolygons = record.latitude == null || record.longitude == null
+        ? <PolygonZone>[]
+        : activePolygons.where((z) => GeofenceGeometry.containsZone(
+          z, record.latitude!, record.longitude!)).toList();
+    final polygonAllowed = containingPolygons
+        .where((z) => z.type != PolygonZoneType.forbidden).toList();
+    final polygonForbidden = containingPolygons
+        .where((z) => z.type == PolygonZoneType.forbidden).toList();
 
     final allowedZones = activeZones.where(isAllowedZone).toList();
 
@@ -114,10 +134,14 @@ class ZoneCheckService {
       record: record,
       insideZones: insideZones,
       forbiddenZones: forbiddenZones,
+      allowedPolygonNames: polygonAllowed.map((z) => z.name).toList(),
+      forbiddenPolygonNames: polygonForbidden.map((z) => z.name).toList(),
       hasGps: recordHasGps(record),
-      hasAllowedZones: allowedZones.isNotEmpty,
-      isOutsideAllowedZones:
-          allowedZones.isNotEmpty && insideAllowedZones.isEmpty,
+      hasAllowedZones: allowedZones.isNotEmpty ||
+          activePolygons.any((z) => z.type != PolygonZoneType.forbidden),
+      isOutsideAllowedZones: recordHasGps(record) && (allowedZones.isNotEmpty ||
+          activePolygons.any((z) => z.type != PolygonZoneType.forbidden)) &&
+          insideAllowedZones.isEmpty && polygonAllowed.isEmpty,
     );
   }
 }

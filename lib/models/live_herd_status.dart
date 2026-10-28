@@ -14,9 +14,8 @@ class LiveCamelStatus {
   final String photoPath;
 
   final bool seenInSession;
-  final bool seenRecently;
+  final bool activeToday;
   final bool missing;
-  final bool criticalMissing;
 
   final bool lowBattery;
   final bool tagUnlocked;
@@ -40,9 +39,8 @@ class LiveCamelStatus {
     required this.camelName,
     required this.photoPath,
     required this.seenInSession,
-    required this.seenRecently,
+    required this.activeToday,
     required this.missing,
-    required this.criticalMissing,
     required this.lowBattery,
     required this.tagUnlocked,
     required this.hasGps,
@@ -72,14 +70,12 @@ bool get hasPhoto {
 }
 
 class LiveHerdStatus {
-  final DateTime sessionStartTime;
   final DateTime generatedAt;
 
   final int totalCamelCount;
   final int seenInSessionCount;
-  final int seenRecentlyCount;
+  final int activeTodayCount;
   final int missingCount;
-  final int criticalMissingCount;
 
   final int insideAllowedCount;
   final int dangerCount;
@@ -89,33 +85,29 @@ class LiveHerdStatus {
   final DateTime? lastRecordAt;
   final String lastRecordText;
 
-  final bool antennaSilent;
 
   final List<LiveCamelStatus> camels;
   final List<LiveCamelStatus> liveProblems;
   final List<LiveCamelStatus> missingCamels;
 
   const LiveHerdStatus({
-    required this.sessionStartTime,
     required this.generatedAt,
     required this.totalCamelCount,
     required this.seenInSessionCount,
-    required this.seenRecentlyCount,
+    required this.activeTodayCount,
     required this.missingCount,
-    required this.criticalMissingCount,
     required this.insideAllowedCount,
     required this.dangerCount,
     required this.lowBatteryCount,
     required this.tagUnlockedCount,
     required this.lastRecordAt,
     required this.lastRecordText,
-    required this.antennaSilent,
     required this.camels,
     required this.liveProblems,
     required this.missingCamels,
   });
 
   bool get hasProblem {
-    return liveProblems.isNotEmpty || antennaSilent;
+    return liveProblems.isNotEmpty;
   }
 }

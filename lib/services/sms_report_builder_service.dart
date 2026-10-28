@@ -1,7 +1,7 @@
-import '../models/area_zone.dart';
-import '../models/camel_profile.dart';
+
 import '../models/sms_report_settings.dart';
 import '../models/tag_record.dart';
+import '../utils/jalali_date_ui.dart';
 import '../utils/iran_time.dart';
 import 'area_zone_service.dart';
 import 'camel_profile_service.dart';
@@ -10,6 +10,8 @@ import 'zone_check_service.dart';
 
 class SmsReportData {
   final DateTime date;
+  final bool weekly;
+  final DateTime? periodStart;
   final int seenCount;
   final int missingCount;
   final int insideAllowedCount;
@@ -19,6 +21,8 @@ class SmsReportData {
 
   const SmsReportData({
     required this.date,
+    this.weekly = false,
+    this.periodStart,
     required this.seenCount,
     required this.missingCount,
     required this.insideAllowedCount,
@@ -84,16 +88,15 @@ class SmsReportBuilderService {
     return result.values.toList();
   }
 
-  static Future<SmsReportData> buildData() async {
-    final records = await LocalStorageService.loadTagRecords();
+  static Future<SmsReportData> buildData({bool weekly = false}) async {
+    final now = IranTime.nowWallClock();
+    final periodStart = weekly ? now.subtract(const Duration(days: 6)) : now;
     final profiles = await CamelProfileService.loadProfiles();
     final zones = await AreaZoneService.loadZones();
-
-    final activeProfiles = profiles.where((profile) {
-      return profile.isActive;
-    }).toList();
-
-    final latestRecords = latestTodayRecordsByTag(records);
+    final activeProfiles = profiles.where((profile) => profile.isActive).toList();
+    final latestRecords = weekly
+        ? await LocalStorageService.loadLatestByTagForRange(periodStart, now)
+        : await LocalStorageService.loadLatestByTagForDay(now);
 
     final seenTags = latestRecords.map((record) => record.tagId).toSet();
 
@@ -131,12 +134,13 @@ class SmsReportBuilderService {
       }
     }
 
-    final today = todayRecords(records);
-
-    final lastReceiveTime = today.isEmpty ? '-' : today.first.receivedTime;
+    final lastReceiveTime = latestRecords.isEmpty
+        ? '-' : latestRecords.first.receivedTime;
 
     return SmsReportData(
-      date: DateTime.now(),
+      date: now,
+      weekly: weekly,
+      periodStart: weekly ? periodStart : null,
       seenCount: latestRecords.length,
       missingCount: missingCount,
       insideAllowedCount: insideAllowedCount,
@@ -151,7 +155,7 @@ class SmsReportBuilderService {
   }
 
   static String dateText(DateTime date) {
-    return '${date.year}/${twoDigit(date.month)}/${twoDigit(date.day)}';
+    return JalaliDateUi.format(date);
   }
 
   static String buildMessage({
@@ -160,10 +164,12 @@ class SmsReportBuilderService {
   }) {
     final lines = <String>[];
 
-    lines.add('گزارش ساربان');
+    lines.add(data.weekly ? 'گزارش هفتگی ساربان' : 'گزارش روزانه ساربان');
 
     if (settings.includeDate) {
-      lines.add('تاریخ: ${dateText(data.date)}');
+      lines.add(data.weekly && data.periodStart != null
+          ? 'بازه: ${dateText(data.periodStart!)} تا ${dateText(data.date)}'
+          : 'تاریخ: ${dateText(data.date)}');
     }
 
     if (settings.includeSeenCount) {
@@ -196,7 +202,7 @@ class SmsReportBuilderService {
   static Future<String> buildCurrentMessage(
     SmsReportSettings settings,
   ) async {
-    final data = await buildData();
+    final data = await buildData(weekly: settings.schedule == 'weekly');
 
     return buildMessage(
       settings: settings,

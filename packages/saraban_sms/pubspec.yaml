@@ -1,0 +1,16 @@
+name: saraban_sms
+version: 1.0.0
+publish_to: none
+description: Internal Android SMS integration for Saraban including headless worker support.
+environment:
+  sdk: '>=3.12.0 <4.0.0'
+  flutter: '>=3.38.0'
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.example.saraban_sms
+        pluginClass: SarabanSmsPlugin

@@ -2,14 +2,23 @@ import 'dart:async';
      import 'dart:convert';
      import 'dart:math' as math;
      import 'dart:io';
+     import 'map_dashboard_components.dart';
+     import 'online_herd_map.dart';
+     import '../services/map_herd_status.dart';
+     import '../services/map_data_events.dart';
+     import '../services/map_cluster_service.dart';
+     import '../services/record_day_service.dart';
 
      import 'package:flutter/material.dart';
+     import 'package:flutter/foundation.dart' show listEquals;
      import 'package:flutter/services.dart';
+     import 'package:url_launcher/url_launcher.dart';
 
      import '../models/area_zone.dart';
      import '../models/geo_area.dart';
      import '../models/polygon_zone.dart';
      import '../models/tag_record.dart';
+     import '../utils/jalali_date_ui.dart';
      import '../utils/iran_time.dart';
      import '../services/area_zone_service.dart';
      import '../services/current_geo_area_service.dart';
@@ -18,7 +27,7 @@ import 'dart:async';
      import '../services/location_service.dart';
      import '../services/polygon_zone_service.dart';
      import '../services/zone_check_service.dart';
-     import 'geo_area_selection_page.dart';
+
      import 'polygon_zone_form_page.dart';
      import 'package:file_picker/file_picker.dart';
      import '../models/geo_point.dart';
@@ -45,7 +54,7 @@ import 'dart:async';
              : null,
          boxShadow: [
            BoxShadow(
-             color: Colors.black.withOpacity(0.06),
+             color: Colors.black.withValues(alpha: 0.06),
              blurRadius: 18,
              offset: const Offset(0, 8),
            ),
@@ -53,57 +62,6 @@ import 'dart:async';
        );
      }
 
-     class _MapAppHeader extends StatelessWidget {
-       final String title;
-
-       const _MapAppHeader({
-         required this.title,
-       });
-
-       @override
-       Widget build(BuildContext context) {
-         return Container(
-           width: double.infinity,
-           padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
-           decoration: const BoxDecoration(
-             gradient: LinearGradient(
-               colors: [
-                 Color(0xFF062C5E),
-                 Color(0xFF086EBB),
-               ],
-               begin: Alignment.topRight,
-               end: Alignment.bottomLeft,
-             ),
-             borderRadius: BorderRadius.only(
-               bottomLeft: Radius.circular(26),
-               bottomRight: Radius.circular(26),
-             ),
-           ),
-           child: SafeArea(
-             bottom: false,
-             child: Row(
-               children: [
-                 const Icon(
-                   Icons.map_rounded,
-                   color: Colors.white,
-                 ),
-                 const SizedBox(width: 10),
-                 Expanded(
-                   child: Text(
-                     title,
-                     style: const TextStyle(
-                       color: Colors.white,
-                       fontSize: 20,
-                       fontWeight: FontWeight.bold,
-                     ),
-                   ),
-                 ),
-               ],
-             ),
-           ),
-         );
-       }
-     }
 
      class _KmlPolygonZoneDraft {
        final String name;
@@ -116,13 +74,16 @@ import 'dart:async';
      }
 
      class MapPage extends StatefulWidget {
-       const MapPage({super.key});
+       /// Set when opening the map directly from the herd page.
+       final String? initialRouteTagId;
+
+       const MapPage({super.key, this.initialRouteTagId});
 
        @override
-       State<MapPage> createState() => _MapPageState();
+       State<MapPage> createState() => MapPageState();
      }
 
-     class _MapPageState extends State<MapPage> {
+     class MapPageState extends State<MapPage> {
        bool isLoading = true;
        List<TagRecord> records = [];
        List<AreaZone> zones = [];
@@ -131,6 +92,141 @@ import 'dart:async';
        Timer? mapRefreshTimer;
        Timer? mapRecordsReloadTimer;
        GeoArea? currentArea;
+       bool _legacyOverallBounds = false;
+       String _searchText = '';
+       MapCamelFilter _filter = MapCamelFilter.all;
+       String? _focusedTagId;
+       bool _onlineMode = false;
+       DateTime _selectedDay = RecordDayService.today;
+       bool _followingToday = true;
+       String _lastTodayKey = RecordDayService.todayKey;
+       Map<String, String> _camelPhotoPaths = {};
+       String? _routeTagId;
+       List<TagRecord> _routeRecords = [];
+       int _routeRequestVersion = 0;
+       final GlobalKey _mapSectionKey = GlobalKey();
+       final ScrollController _pageScrollController = ScrollController();
+       bool _scrollToMapWhenReady = false;
+       int _recordsRequestVersion = 0;
+       Timer? _mapDataReloadTimer;
+
+       void _onMapDataChanged() {
+         _mapDataReloadTimer?.cancel();
+         _mapDataReloadTimer = Timer(const Duration(milliseconds: 400), () {
+           if (mounted) unawaited(_reloadMapData());
+         });
+       }
+
+       String _dateLabel(DateTime day) {
+         final today = RecordDayService.isToday(day);
+         return '${JalaliDateUi.format(day)}${today ? ' • امروز' : ''}';
+       }
+
+       Future<void> _selectMapDay() async {
+         final today = RecordDayService.today;
+         final selected = await JalaliDateUi.pick(
+           context,
+           initialDate: _selectedDay,
+           firstDate: RecordDayService.oldestDay,
+           lastDate: today,
+           helpText: 'روز نمایش موقعیت‌ها و مسیر شتر',
+           confirmText: 'نمایش',
+         );
+         if (!mounted || selected == null) return;
+         _selectedDay = selected;
+         _followingToday = RecordDayService.isToday(selected);
+         ++_routeRequestVersion;
+         setState(() { records = []; _routeRecords = []; });
+         await loadRecords();
+         if (_routeTagId != null) {
+           final request = ++_routeRequestVersion;
+           unawaited(_loadCamelRoute(_routeTagId!, request));
+         }
+       }
+
+       Future<void> _toggleCamelRoute(TagRecord record) async {
+         if (_routeTagId == record.tagId) {
+           ++_routeRequestVersion;
+           setState(() { _routeTagId = null; _routeRecords = []; });
+           return;
+         }
+         final request = ++_routeRequestVersion;
+         setState(() { _routeTagId = record.tagId; _focusedTagId = record.tagId;
+           _routeRecords = []; });
+         await _loadCamelRoute(record.tagId, request);
+       }
+
+       Future<void> _loadCamelRoute(String tagId, int request) async {
+         try {
+           final track = await LocalStorageService.loadGpsTrackForTag(tagId, day: _selectedDay);
+           if (!mounted || request != _routeRequestVersion || _routeTagId != tagId) return;
+           setState(() => _routeRecords = track);
+           if (track.isEmpty) showMapMessage('برای این شتر مسیر GPS ذخیره نشده است.');
+         } catch (_) {
+           if (!mounted || request != _routeRequestVersion) return;
+           showMapMessage('خواندن مسیر شتر ممکن نشد.', isError: true);
+         }
+       }
+
+       /// Public entry point used by the shell's existing map tab.
+       /// Does not change the selected day; the user can pick any retained day.
+       void showCamelRoute(String tagId) {
+         if (!mounted || tagId.trim().isEmpty) return;
+         final request = ++_routeRequestVersion;
+         setState(() {
+           _routeTagId = tagId;
+           _focusedTagId = tagId;
+           _routeRecords = [];
+           _filter = MapCamelFilter.all;
+           _searchText = '';
+           _searchController.clear();
+           _scrollToMapWhenReady = true;
+         });
+         unawaited(_loadCamelRoute(tagId, request));
+         _scrollToMapIfReady();
+       }
+
+       void _scrollToMapIfReady() {
+         WidgetsBinding.instance.addPostFrameCallback((_) {
+           if (!mounted || !_scrollToMapWhenReady) return;
+           final mapContext = _mapSectionKey.currentContext;
+           if (mapContext != null) {
+             _scrollToMapWhenReady = false;
+             unawaited(Scrollable.ensureVisible(
+               mapContext,
+               duration: const Duration(milliseconds: 380),
+               curve: Curves.easeOutCubic,
+               alignment: 0.05,
+             ));
+             return;
+           }
+           // A ListView may not have built its off-screen map section yet.
+           // Move toward it in bounded steps until its context is available.
+           if (!_pageScrollController.hasClients) return;
+           final position = _pageScrollController.position;
+           final next = (position.pixels + 430.0)
+               .clamp(0.0, position.maxScrollExtent).toDouble();
+           if (next <= position.pixels + 1) return;
+           unawaited(_pageScrollController.animateTo(
+             next,
+             duration: const Duration(milliseconds: 260),
+             curve: Curves.easeOutCubic,
+           ).then((_) {
+             if (mounted && _scrollToMapWhenReady) _scrollToMapIfReady();
+           }));
+         });
+       }
+
+       final TextEditingController _searchController = TextEditingController();
+       final ScrollController _camelListController = ScrollController();
+
+       void _resetCamelListPosition() {
+         WidgetsBinding.instance.addPostFrameCallback((_) {
+           if (mounted && _camelListController.hasClients) {
+             _camelListController.jumpTo(0);
+           }
+         });
+       }
 
        void _onRecordsChanged() {
          if (mapRecordsReloadTimer?.isActive == true) return;
@@ -143,15 +239,29 @@ import 'dart:async';
        void initState() {
          super.initState();
 
+         if (widget.initialRouteTagId != null &&
+             widget.initialRouteTagId!.trim().isNotEmpty) {
+           _routeTagId = widget.initialRouteTagId;
+           _focusedTagId = widget.initialRouteTagId;
+           _scrollToMapWhenReady = true;
+         }
          TagRecordsEvents.revision.addListener(_onRecordsChanged);
-         loadRecords();
+         MapDataEvents.revision.addListener(_onMapDataChanged);
+         loadRecords(refreshPhotos: true);
          loadCurrentArea();
          loadPolygonZones();
 
          mapRefreshTimer = Timer.periodic(
-           const Duration(minutes: 1),
+           const Duration(seconds: 15),
            (_) {
              if (!mounted) return;
+             if (_lastTodayKey != RecordDayService.todayKey) {
+               _lastTodayKey = RecordDayService.todayKey;
+               if (_followingToday) {
+                 _selectedDay = RecordDayService.today;
+                 unawaited(loadRecords());
+               }
+             }
              setState(() {});
            },
          );
@@ -160,8 +270,13 @@ import 'dart:async';
        @override
        void dispose() {
          TagRecordsEvents.revision.removeListener(_onRecordsChanged);
+         MapDataEvents.revision.removeListener(_onMapDataChanged);
+         _mapDataReloadTimer?.cancel();
          mapRecordsReloadTimer?.cancel();
          mapRefreshTimer?.cancel();
+         _searchController.dispose();
+         _camelListController.dispose();
+         _pageScrollController.dispose();
          super.dispose();
        }
 
@@ -177,6 +292,7 @@ import 'dart:async';
 
        setState(() {
          currentArea = area;
+         _legacyOverallBounds = savedArea != null;
        });
      }
 
@@ -229,6 +345,10 @@ import 'dart:async';
          return;
        }
 
+       final existing = await PolygonZoneService.loadZones();
+       await PolygonZoneService.saveZones(existing.where((zone) =>
+           !zone.id.startsWith(MapHerdStatus.overallKmlIdPrefix)).toList());
+       await loadPolygonZones();
        GeoArea? defaultArea;
 
        for (final item in GeoAreaService.getAll()) {
@@ -245,6 +365,7 @@ import 'dart:async';
 
          setState(() {
            currentArea = null;
+           _legacyOverallBounds = false;
          });
 
          showMapMessage('محدوده کلی حذف شد.');
@@ -257,6 +378,7 @@ import 'dart:async';
 
        setState(() {
          currentArea = defaultArea;
+         _legacyOverallBounds = false;
        });
 
        showMapMessage(
@@ -373,14 +495,37 @@ import 'dart:async';
            result: result,
          );
 
-         await CurrentGeoAreaService.save(
-           updatedArea,
-         );
+         await CurrentGeoAreaService.save(updatedArea);
+         // Unlike the legacy bounds-only storage, save the actual KML rings
+         // as named polygons. Same persistent store as manually drawn fences.
+         final existing = await PolygonZoneService.loadZones();
+         final now = DateTime.now();
+         final imported = <PolygonZone>[
+           for (var i = 0; i < result.features.length; i++)
+             PolygonZone(
+               id: '${MapHerdStatus.overallKmlIdPrefix}${area.id}-$i',
+               name: result.features.length == 1
+                   ? result.name : result.features[i].name,
+               type: PolygonZoneType.grazing,
+               points: result.features[i].points,
+               holes: result.features[i].holes,
+               isActive: true,
+               createdAt: now,
+               updatedAt: now,
+             ),
+         ];
+         await PolygonZoneService.saveZones([
+           ...existing.where((zone) =>
+               !zone.id.startsWith(MapHerdStatus.overallKmlIdPrefix)),
+           ...imported,
+         ]);
+         await loadPolygonZones();
 
          if (!mounted) return;
 
          setState(() {
            currentArea = updatedArea;
+           _legacyOverallBounds = false;
          });
 
          showMapMessage(
@@ -643,7 +788,8 @@ import 'dart:async';
          }
 
          final outsideCount =
-             countPointsOutsideCurrentArea(result.points);
+             result.features.fold<int>(0, (sum, feature) =>
+                 sum + countPointsOutsideCurrentArea(feature.points));
 
          if (outsideCount > 0) {
            final accepted =
@@ -685,23 +831,24 @@ import 'dart:async';
 
          final now = DateTime.now();
 
-         final zone = PolygonZone(
-           id: PolygonZoneService.createId(),
-           name: draft.name,
-           type: draft.type,
-           points: result.points,
-           isActive: true,
-           createdAt: now,
-           updatedAt: now,
-         );
-
-         await PolygonZoneService.addZone(zone);
-
+         final existing = await PolygonZoneService.loadZones();
+         final imported = <PolygonZone>[
+           for (var i = 0; i < result.features.length; i++)
+             PolygonZone(
+               id: '${PolygonZoneService.createId()}-$i',
+               name: result.features.length == 1
+                   ? draft.name : '${draft.name} / ${result.features[i].name}',
+               type: draft.type,
+               points: result.features[i].points,
+               holes: result.features[i].holes,
+               isActive: true,
+               createdAt: now,
+               updatedAt: now,
+             ),
+         ];
+         await PolygonZoneService.saveZones([...existing, ...imported]);
          await loadPolygonZones();
-
-         showMapMessage(
-           'محدوده داخلی ${zone.name} از KML اضافه شد.',
-         );
+         showMapMessage('${imported.length} محدوده از KML ثبت شد.');
        } catch (e) {
          showMapMessage(
            'خطا در وارد کردن KML داخلی: $e',
@@ -921,10 +1068,10 @@ import 'dart:async';
          margin: const EdgeInsets.only(top: 10),
          padding: const EdgeInsets.all(12),
          decoration: BoxDecoration(
-           color: color.withOpacity(0.06),
+           color: color.withValues(alpha: 0.06),
            borderRadius: BorderRadius.circular(14),
            border: Border.all(
-             color: color.withOpacity(0.25),
+             color: color.withValues(alpha: 0.25),
            ),
          ),
          child: Row(
@@ -1100,21 +1247,44 @@ import 'dart:async';
        );
      }
 
-       Future<void> loadRecords() async {
-         final loadedRecords = await LocalStorageService.loadTagRecords();
+       Future<void> loadRecords({bool refreshPhotos = false}) async {
+         final request = ++_recordsRequestVersion;
+         final loadedRecords = await LocalStorageService.loadMapCamels(day: _selectedDay);
          final loadedZones = await AreaZoneService.loadZones();
+         Map<String, String> newPhotos = _camelPhotoPaths;
+         if (refreshPhotos || isLoading) {
+           try {
+             final details = await CamelDetailService.loadAllDetails(limit: 10000);
+             newPhotos = {
+               for (final detail in details)
+                 if (detail.photoPath.trim().isNotEmpty)
+                   detail.tagId: detail.photoPath,
+             };
+           } catch (_) {
+             // GPS can remain usable without the optional profile database.
+           }
+         }
 
-         if (!mounted) return;
+         if (!mounted || request != _recordsRequestVersion) return;
 
          setState(() {
+           _camelPhotoPaths = newPhotos;
            records = loadedRecords;
            zones = loadedZones;
            isLoading = false;
          });
+         if (_routeTagId != null && _followingToday) {
+           final routeRequest = ++_routeRequestVersion;
+           unawaited(_loadCamelRoute(_routeTagId!, routeRequest));
+         }
+         if (_scrollToMapWhenReady) _scrollToMapIfReady();
        }
 
        bool hasGps(TagRecord record) {
-         return record.latitude != null && record.longitude != null;
+         final lat = record.latitude;
+         final lon = record.longitude;
+         return lat != null && lon != null && lat.isFinite && lon.isFinite &&
+             lat.abs() <= 90 && lon.abs() <= 180 && !(lat == 0 && lon == 0);
        }
 
        DateTime? recordDateTime(TagRecord record) {
@@ -1172,272 +1342,440 @@ import 'dart:async';
            return record.receivedTime;
          }
 
-         return '${date.year}/${twoDigit(date.month)}/${twoDigit(date.day)} - ${twoDigit(date.hour)}:${twoDigit(date.minute)}';
+         return JalaliDateUi.dateTime(date);
        }
 
 
 
 
+       Future<void> _reloadMapData() async {
+         await Future.wait([
+           loadRecords(refreshPhotos: true),
+           loadCurrentArea(),
+           loadPolygonZones(),
+         ]);
+       }
+
+       String _camelDisplayName(TagRecord record) {
+         final name = record.camelName.trim();
+         if (name.isNotEmpty && name != 'شتر ثبت‌نشده' &&
+             name != 'شتر ثبت نشده' && name != '-') {
+           return name;
+         }
+         return 'شتر شماره ${record.camelNo}';
+       }
+
+       String _normalizeSearch(String input) {
+         const sourceDigits = '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩';
+         const asciiDigits = '01234567890123456789';
+         var text = input.trim().toLowerCase()
+             .replaceAll('ي', 'ی').replaceAll('ك', 'ک');
+         for (var i = 0; i < sourceDigits.length; i++) {
+           text = text.replaceAll(sourceDigits[i], asciiDigits[i]);
+         }
+         return text;
+       }
+
+       bool _searchMatches(TagRecord record) {
+         final query = _normalizeSearch(_searchText);
+         if (query.isEmpty) return true;
+         return _normalizeSearch(record.camelName).contains(query) ||
+             _normalizeSearch(record.camelNo).contains(query) ||
+             _normalizeSearch(record.tagId).contains(query) ||
+             _normalizeSearch(_camelDisplayName(record)).contains(query);
+       }
+
+       Future<void> _openInExternalMap() async {
+         TagRecord? selected;
+         for (final record in latestGpsRecordsByTag) {
+           if (record.tagId == _focusedTagId) {
+             selected = record;
+             break;
+           }
+         }
+         if (selected == null && latestGpsRecordsByTag.isNotEmpty) {
+           selected = latestGpsRecordsByTag.first;
+         }
+         final lat = selected?.latitude ?? currentArea?.centerLatitude;
+         final lon = selected?.longitude ?? currentArea?.centerLongitude;
+         if (lat == null || lon == null) return;
+         final url = Uri.https('www.google.com', '/maps/search/', {
+           'api': '1', 'query': '$lat,$lon',
+         });
+         final opened = await launchUrl(url, mode: LaunchMode.externalApplication);
+         if (!opened && mounted) {
+           showMapMessage('برنامه نقشه دیگری در دسترس نیست.', isError: true);
+         }
+       }
+
+       Widget _zoneTools() {
+         final actions = <MapZoneActionData>[
+           MapZoneActionData('KML داخلی', Icons.file_upload_outlined,
+               const Color(0xFF167E62), importKmlAsInternalPolygonZone),
+           MapZoneActionData('KML کلی', Icons.public_rounded,
+               const Color(0xFF2B78B9), importKmlForCurrentArea),
+           MapZoneActionData('محدوده دستی', Icons.add_location_alt_outlined,
+               const Color(0xFF7257AB), openPolygonZoneForm),
+           MapZoneActionData('حذف محدوده کلی', Icons.delete_outline_rounded,
+               const Color(0xFFC84F4B), resetCurrentAreaBoundsToDefault),
+         ];
+         return Column(
+           crossAxisAlignment: CrossAxisAlignment.start,
+           children: [
+             const MapSectionTitle('ابزارهای محدوده'),
+             const SizedBox(height: 10),
+             SizedBox(
+               height: 108,
+               child: ListView.separated(
+                 scrollDirection: Axis.horizontal,
+                 itemCount: actions.length,
+                 separatorBuilder: (_, __) => const SizedBox(width: 9),
+                 itemBuilder: (context, index) => MapZoneActionCard(
+                   data: actions[index],
+                   onCompleted: _reloadMapData,
+                 ),
+               ),
+             ),
+             if (polygonZones.isNotEmpty) ...[
+               const SizedBox(height: 8),
+               TextButton.icon(
+                 onPressed: () => showModalBottomSheet<void>(
+                   context: context,
+                   isScrollControlled: true,
+                   showDragHandle: true,
+                   builder: (sheetContext) => SafeArea(
+                     child: Padding(
+                       padding: const EdgeInsets.all(16),
+                       child: Column(
+                         mainAxisSize: MainAxisSize.min,
+                         children: [
+                           const Text('محدوده‌های داخلی ثبت‌شده',
+                               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                           const SizedBox(height: 8),
+                           Flexible(
+                             child: ListView(
+                               shrinkWrap: true,
+                               children: polygonZones.map((zone) => ListTile(
+                                 title: Text(zone.name),
+                                 subtitle: Text('${zone.points.length} نقطه'),
+                                 trailing: IconButton(
+                                   tooltip: 'حذف محدوده',
+                                   icon: const Icon(Icons.delete_outline_rounded),
+                                   onPressed: () async {
+                                     Navigator.pop(sheetContext);
+                                     await deletePolygonZone(zone);
+                                     await _reloadMapData();
+                                   },
+                                 ),
+                               )).toList(),
+                             ),
+                           ),
+                         ],
+                       ),
+                     ),
+                   ),
+                 ),
+                 icon: const Icon(Icons.layers_outlined, size: 18),
+                 label: Text('محدوده‌های داخلی (${polygonZones.length})'),
+               ),
+             ],
+           ],
+         );
+       }
+
        @override
        Widget build(BuildContext context) {
-         final gpsList = latestGpsRecordsByTag;
-         final activeMapZones = zones.where((zone) => zone.isActive).toList();
-         final activePolygonZoneCount = polygonZones.where((zone) {
-           return zone.isActive && zone.isValid;
-         }).length;
-
-         final hasAnythingToShowOnMap =
-             gpsList.isNotEmpty ||
-             activeMapZones.isNotEmpty ||
-             activePolygonZoneCount > 0 ||
-             currentArea != null;
-
-         final allGpsCount = gpsRecords.length;
-         final uniqueCamelCount = gpsList.length;
-
-         final lowBatteryCount = gpsList.where((record) {
-           return record.isBatteryLow;
-         }).length;
-
-         final unlockedCount = gpsList.where((record) {
-           return record.lock == 0;
-         }).length;
+         final allCamels = latestGpsRecordsByTag;
+         final activeZones = zones.where((zone) => zone.isActive).toList();
+         final activePolygons = polygonZones
+             .where((zone) => zone.isActive && zone.isValid).toList();
+         final assessmentByTag = {
+           for (final camel in allCamels)
+             camel.tagId: MapHerdStatus.assess(
+               camel, currentArea, activeZones, activePolygons,
+               useLegacyOverallBounds: _legacyOverallBounds,
+             ),
+         };
+         final statusByTag = {
+           for (final entry in assessmentByTag.entries)
+             entry.key: entry.value.state,
+         };
+         final lowBatteryCount = allCamels.where((c) => c.isBatteryLow).length;
+         final outsideCount = allCamels.where(
+           (c) => statusByTag[c.tagId] == MapBoundaryState.outside,
+         ).length;
+         final matched = allCamels.where((camel) {
+           if (!_searchMatches(camel)) return false;
+           switch (_filter) {
+             case MapCamelFilter.all:
+               return true;
+             case MapCamelFilter.inside:
+               return statusByTag[camel.tagId] == MapBoundaryState.inside;
+             case MapCamelFilter.outside:
+               return statusByTag[camel.tagId] == MapBoundaryState.outside;
+             case MapCamelFilter.lowBattery:
+               return camel.isBatteryLow;
+           }
+         }).toList();
+         // Keep marker set aligned with the very same search/filter as cards.
+         final availableMapRecords = matched;
+         final hasMapContent = allCamels.isNotEmpty || activeZones.isNotEmpty ||
+             activePolygons.isNotEmpty || currentArea != null;
 
          return Directionality(
            textDirection: TextDirection.rtl,
            child: Scaffold(
-             backgroundColor: const Color(0xFFF5F7FA),
+             backgroundColor: const Color(0xFFFCF8F4),
              body: Column(
                children: [
-                 const _MapAppHeader(title: 'نقشه'),
+                 MapWarmHeader(
+                   onBack: widget.initialRouteTagId == null
+                       ? null
+                       : () => Navigator.of(context).maybePop(),
+                 ),
                  Expanded(
-                   child: Center(
-                     child: ConstrainedBox(
-                       constraints: const BoxConstraints(maxWidth: 430),
-                       child: isLoading
-                           ? const Center(child: CircularProgressIndicator())
-                           : RefreshIndicator(
-                               onRefresh: loadRecords,
-                               child: ListView(
-                                 padding: const EdgeInsets.all(14),
-                                 children: [
-                                   const Padding(
-                                     padding: EdgeInsets.only(bottom: 10),
-                                     child: Text(
-                                       'موقعیت‌های نمایش‌داده‌شده تاریخی هستند و لزوماً محل فعلی شتر نیستند. پیام بدون مختصات GPS روی نقشه نمایش داده نمی‌شود.',
-                                       style: TextStyle(color: Colors.black54, fontSize: 12),
-                                     ),
-                                   ),
-                                   Row(
-                                     children: [
-                                       Expanded(
-                                         child: MapSummaryCard(
-                                           title: 'GPS ثبت‌شده',
-                                           value: allGpsCount.toString(),
-                                           icon: Icons.gps_fixed_rounded,
-                                           color: const Color(0xFF086EBB),
-                                         ),
-                                       ),
-                                       const SizedBox(width: 10),
-                                       Expanded(
-                                         child: MapSummaryCard(
-                                           title: 'شتر دارای موقعیت',
-                                           value: uniqueCamelCount.toString(),
-                                           icon: Icons.pets_rounded,
-                                           color: const Color(0xFF008B62),
-                                         ),
-                                       ),
-                                     ],
-                                   ),
-
-                                   const SizedBox(height: 10),
-
-                                   Row(
-                                     children: [
-                                       Expanded(
-                                         child: MapSummaryCard(
-                                           title: 'باتری ضعیف',
-                                           value: lowBatteryCount.toString(),
-                                           icon: Icons.battery_alert_rounded,
-                                           color: const Color(0xFFE87500),
-                                         ),
-                                       ),
-                                       const SizedBox(width: 10),
-                                       Expanded(
-                                         child: MapSummaryCard(
-                                           title: 'تگ باز',
-                                           value: unlockedCount.toString(),
-                                           icon: Icons.lock_open_rounded,
-                                           color: const Color(0xFFD32F2F),
-                                         ),
-                                       ),
-                                     ],
-                                   ),
-
-                                   const SizedBox(height: 14),
-
-
-                                      const SizedBox(height: 14),
-                                      buildPolygonZoneToolsCard(),
-                                      const SizedBox(height: 14),
-                                   Container(
-                                     padding: const EdgeInsets.all(14),
-                                     decoration: _mapCardDecoration(),
-                                     child: Column(
-                                       crossAxisAlignment: CrossAxisAlignment.start,
-                                       children: [
-                                         Row(
-                                           children: [
-                                             const Icon(
-                                               Icons.map_rounded,
-                                               color: Color(0xFF062C5E),
-                                             ),
-                                             const SizedBox(width: 8),
-                                             const Expanded(
-                                               child: Text(
-                                                 'نمای ساده موقعیت‌های امروز',
-                                                 style: TextStyle(
-                                                   fontWeight: FontWeight.bold,
-                                                   fontSize: 16,
-                                                   color: Color(0xFF062C5E),
-                                                 ),
-                                               ),
-                                             ),
-                                             IconButton(
-                                               onPressed: loadRecords,
-                                               icon: const Icon(
-                                                 Icons.refresh_rounded,
-                                               ),
-                                               tooltip: 'تازه‌سازی',
-                                             ),
-                                           ],
-                                         ),
-
-                                         const SizedBox(height: 10),
-
-                                         SizedBox(
-                                           width: double.infinity,
-                                           child: OutlinedButton.icon(
-                                             onPressed: () async {
-                                               await Navigator.of(context).push(
-                                                 MaterialPageRoute(
-                                                   builder: (_) => AreaZonesPage(),
-                                                 ),
-                                               );
-
-                                               await loadRecords();
-                                             },
-                                             icon: const Icon(Icons.layers_rounded),
-                                             label: const Text('مدیریت محدوده‌ها'),
-                                           ),
-                                         ),
-
-                                         const SizedBox(height: 10),
-
-                                      if (!hasAnythingToShowOnMap)
-                                           Container(
-                                             width: double.infinity,
-                                             padding: const EdgeInsets.all(18),
-                                             decoration: BoxDecoration(
-                                               color: const Color(0xFFFFF3E0),
-                                               borderRadius:
-                                                   BorderRadius.circular(16),
-                                             ),
-                                             child: const Column(
-                                               children: [
-                                                 Icon(
-                                                   Icons.gps_not_fixed_rounded,
-                                                   size: 54,
-                                                   color: Color(0xFFE87500),
-                                                 ),
-                                                 SizedBox(height: 12),
-                                                 Text(
-                                                   'امروز هنوز موقعیت یا محدوده‌ای ثبت نشده است.',
-                                                   textAlign: TextAlign.center,
-                                                   style: TextStyle(
-                                                     fontWeight: FontWeight.bold,
-                                                     fontSize: 16,
-                                                   ),
-                                                 ),
-                                                 SizedBox(height: 8),
-                                                 Text(
-                                                   'Location گوشی را روشن کن و از صفحه دریافت یک JSON پردازش کن یا از مدیریت محدوده‌ها یک محدوده بساز.',
-                                                   textAlign: TextAlign.center,
-                                                   style: TextStyle(
-                                                     color: Colors.black54,
-                                                     height: 1.7,
-                                                   ),
-                                                 ),
-                                               ],
-                                             ),
-                                           )
-                                         else
-                                       SimpleGpsMap(
-                                         records: gpsList,
-                                         trackRecords: gpsRecords,
-                                         zones: activeMapZones,
-                                         area: currentArea,
-                                         polygonZones: polygonZones,
-                                       )
-                                       ],
-                                     ),
-                                   ),
-
-                                   const SizedBox(height: 14),
-
-                                   Row(
-                                     children: [
-                                       const Expanded(
-                                         child: Text(
-                                           'آخرین موقعیت شترهای امروز',
-                                           style: TextStyle(
-                                             fontWeight: FontWeight.bold,
-                                             fontSize: 16,
-                                             color: Color(0xFF062C5E),
-                                           ),
-                                         ),
-                                       ),
-                                       Text(
-                                         '${gpsList.length} مورد',
-                                         style: const TextStyle(
-                                           color: Colors.black54,
-                                           fontWeight: FontWeight.bold,
-                                         ),
-                                       ),
-                                     ],
-                                   ),
-
-                                   const SizedBox(height: 10),
-
-                                   if (gpsList.isEmpty)
-                                     Container(
-                                       padding: const EdgeInsets.all(18),
-                                       decoration: _mapCardDecoration(),
-                                       child: const Text(
-                                         'امروز رکورد GPS برای نمایش در نقشه وجود ندارد.',
-                                         textAlign: TextAlign.center,
-                                         style: TextStyle(
-                                           color: Colors.black54,
-                                           height: 1.7,
-                                         ),
-                                       ),
-                                     )
-                                   else
-                                     ...gpsList.map(
-                                       (record) => GpsRecordCard(
-                                                     record: record,
-                                                     dateText: recordDateText(record),
-                                                     zones: activeMapZones,
-                                                     polygonZones: polygonZones,
-                                                   ),
-                                     ),
-
-                                   const SizedBox(height: 40),
-                                 ],
+                   child: isLoading
+                     ? const Center(child: CircularProgressIndicator())
+                     : RefreshIndicator(
+                         onRefresh: _reloadMapData,
+                         color: const Color(0xFFAF582F),
+                         child: ListView(
+                           controller: _pageScrollController,
+                           physics: const AlwaysScrollableScrollPhysics(),
+                           padding: const EdgeInsets.fromLTRB(14, 12, 14, 105),
+                           children: [
+                             const MapHeroBanner(),
+                             const SizedBox(height: 10),
+                             Container(
+                               decoration: _mapCardDecoration(radius: 16),
+                               child: ListTile(
+                                 dense: true,
+                                 leading: const Icon(Icons.event_rounded, color: Color(0xFFB65C2E)),
+                                 title: Text('موقعیت و مسیر: ${_dateLabel(_selectedDay)}',
+                                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                                 subtitle: const Text('امروز یا یکی از ۹ روز گذشته'),
+                                 trailing: const Icon(Icons.expand_more_rounded),
+                                 onTap: _selectMapDay,
                                ),
                              ),
-                     ),
-                   ),
+                             const SizedBox(height: 12),
+                             Row(children: [
+                               Expanded(child: MapStatCard(
+                                 label: 'روی نقشه', count: allCamels.length,
+                                 icon: Icons.pets_rounded,
+                                 tint: const Color(0xFFE9F6EE),
+                                 foreground: const Color(0xFF147A54),
+                               )),
+                               const SizedBox(width: 8),
+                               Expanded(child: MapStatCard(
+                                 label: 'خارج محدوده', count: outsideCount,
+                                 icon: Icons.report_problem_outlined,
+                                 tint: const Color(0xFFFFEBED),
+                                 foreground: const Color(0xFFC63F50),
+                               )),
+                               const SizedBox(width: 8),
+                               Expanded(child: MapStatCard(
+                                 label: 'باتری ضعیف', count: lowBatteryCount,
+                                 icon: Icons.battery_alert_rounded,
+                                 tint: const Color(0xFFFFF1E0),
+                                 foreground: const Color(0xFFDB7E18),
+                               )),
+                             ]),
+                             const SizedBox(height: 17),
+                             _zoneTools(),
+                             const SizedBox(height: 14),
+                             MapSearchField(
+                               controller: _searchController,
+                               onChanged: (value) {
+                                 setState(() => _searchText = value);
+                                 _resetCamelListPosition();
+                               },
+                             ),
+                             const SizedBox(height: 10),
+                             MapFilterChips(
+                               selected: _filter,
+                               onSelected: (value) {
+                                 setState(() => _filter = value);
+                                 _resetCamelListPosition();
+                               },
+                             ),
+                             const SizedBox(height: 11),
+                             if (matched.isNotEmpty)
+                               SizedBox(
+                                 height: 98,
+                                 child: ListView.separated(
+                                   scrollDirection: Axis.horizontal,
+                                   itemCount: matched.length,
+                                   separatorBuilder: (_, __) => const SizedBox(width: 12),
+                                   itemBuilder: (context, index) {
+                                     final camel = matched[index];
+                                     return MapCamelAvatar(
+                                       name: _camelDisplayName(camel),
+                                       photoPath: _camelPhotoPaths[camel.tagId],
+                                       selected: _focusedTagId == camel.tagId,
+                                       onTap: () => setState(() => _focusedTagId = camel.tagId),
+                                     );
+                                   },
+                                 ),
+                               )
+                             else
+                               const Padding(
+                                 padding: EdgeInsets.all(12),
+                                 child: Text('شتر مطابق جستجو یا فیلتر پیدا نشد.',
+                                     textAlign: TextAlign.center),
+                               ),
+                             const SizedBox(height: 11),
+                             Container(
+                               key: _mapSectionKey,
+                               decoration: _mapCardDecoration(radius: 20),
+                               padding: const EdgeInsets.all(8),
+                               child: Column(children: [
+                                 Row(children: [
+                                   const Expanded(child: Text('نمای موقعیت‌ها',
+                                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14))),
+                                   IconButton(
+                                     tooltip: 'باز کردن موقعیت در برنامه نقشه دیگر',
+                                     onPressed: _openInExternalMap,
+                                     icon: const Icon(Icons.open_in_new_rounded,
+                                       color: Color(0xFFB65C2E), size: 21),
+                                   ),
+                                   MapModeSwitch(
+                                     online: _onlineMode,
+                                     onChanged: (value) => setState(() => _onlineMode = value),
+                                   ),
+                                 ]),
+                                 if (_routeTagId != null && allCamels.isNotEmpty)
+                                   Padding(
+                                     padding: const EdgeInsets.only(top: 5, bottom: 6),
+                                     child: Row(children: [
+                                       const Icon(Icons.route_rounded, size: 17,
+                                         color: Color(0xFFB75C2D)),
+                                       const SizedBox(width: 6),
+                                       Expanded(child: Text(
+                                         'مسیر ${_camelDisplayName(allCamels.firstWhere(
+                                           (c) => c.tagId == _routeTagId,
+                                           orElse: () => allCamels.first))} • ${_routeRecords.length} نقطه',
+                                         maxLines: 1, overflow: TextOverflow.ellipsis,
+                                         style: const TextStyle(fontSize: 11,
+                                           fontWeight: FontWeight.bold))),
+                                       IconButton(
+                                         tooltip: 'بستن مسیر',
+                                         onPressed: () {
+                                           ++_routeRequestVersion;
+                                           setState(() { _routeTagId = null; _routeRecords = []; });
+                                         },
+                                         icon: const Icon(Icons.close_rounded, size: 18)),
+                                     ]),
+                                   ),
+                                 const SizedBox(height: 6),
+                                 if (!hasMapContent)
+                                   const SizedBox(
+                                     height: 320,
+                                     child: Center(child: Text('هنوز مختصات یا محدوده‌ای برای نمایش ثبت نشده است.')),
+                                   )
+                                 else if (_onlineMode)
+                                   OnlineHerdMap(
+                                     key: ValueKey('online-${RecordDayService.key(_selectedDay)}'),
+                                     records: availableMapRecords,
+                                     zones: activeZones,
+                                     polygons: activePolygons,
+                                     area: currentArea,
+                                     selectedTagId: _focusedTagId,
+                                     onCamelSelected: (record) => setState(() => _focusedTagId = record.tagId),
+                                     nameForRecord: _camelDisplayName,
+                                     routeRecords: _routeRecords,
+                                   )
+                                 else
+                                   SimpleGpsMap(
+                                     key: ValueKey('offline-${RecordDayService.key(_selectedDay)}'),
+                                     records: availableMapRecords,
+                                     trackRecords: _routeRecords,
+                                     zones: activeZones,
+                                     area: currentArea,
+                                     polygonZones: activePolygons,
+                                     drawAreaBounds: !activePolygons.any((zone) =>
+                                         zone.id.startsWith(MapHerdStatus.overallKmlIdPrefix)),
+                                     showQuickSelector: false,
+                                     focusedTagId: _focusedTagId,
+                                     routeTagId: _routeTagId,
+                                     onRouteRequest: _toggleCamelRoute,
+                                     onRouteClosed: () {
+                                       ++_routeRequestVersion;
+                                       setState(() { _routeTagId = null; _routeRecords = []; });
+                                     },
+                                     height: 355,
+                                   ),
+                                 const SizedBox(height: 6),
+                                 const Padding(
+                                   padding: EdgeInsets.symmetric(horizontal: 6),
+                                   child: Text(
+                                     'موقعیت‌ها فقط مربوط به روز انتخاب‌شده هستند و الزاماً زنده نیستند.',
+                                     style: TextStyle(color: Colors.black54, fontSize: 10),
+                                   ),
+                                 ),
+                               ]),
+                             ),
+                             const SizedBox(height: 18),
+                             MapSectionTitle('شترهای روی نقشه (${matched.length})'),
+                             const SizedBox(height: 10),
+                             if (matched.isEmpty)
+                               const Center(child: Text('موردی برای نمایش وجود ندارد.'))
+                             else
+                               LayoutBuilder(builder: (context, constraints) {
+                                 final rowCount = (matched.length + 1) ~/ 2;
+                                 final height = (rowCount * 160.0).clamp(165.0, 395.0).toDouble();
+                                 return Container(
+                                   height: height,
+                                   decoration: _mapCardDecoration(radius: 18),
+                                   padding: const EdgeInsets.all(7),
+                                   child: Scrollbar(
+                                     controller: _camelListController,
+                                     thumbVisibility: rowCount > 2,
+                                     child: ListView.builder(
+                                       controller: _camelListController,
+                                       key: const PageStorageKey('map_camel_list'),
+                                       physics: const AlwaysScrollableScrollPhysics(),
+                                       cacheExtent: 260,
+                                       itemCount: rowCount,
+                                       itemBuilder: (context, row) {
+                                         final firstIndex = row * 2;
+                                         final items = <TagRecord>[
+                                           matched[firstIndex],
+                                           if (firstIndex + 1 < matched.length) matched[firstIndex + 1],
+                                         ];
+                                         return Padding(
+                                           padding: const EdgeInsets.only(bottom: 9),
+                                           child: Row(
+                                             crossAxisAlignment: CrossAxisAlignment.start,
+                                             children: [
+                                               for (var i = 0; i < 2; i++) ...[
+                                                 if (i > 0) const SizedBox(width: 9),
+                                                 Expanded(child: i >= items.length
+                                                   ? const SizedBox.shrink()
+                                                   : MapCompactCamelCard(
+                                                     key: ValueKey(items[i].tagId),
+                                                     record: items[i],
+                                                     title: _camelDisplayName(items[i]),
+                                                     photoPath: _camelPhotoPaths[items[i].tagId],
+                                                     boundary: statusByTag[items[i].tagId] ?? MapBoundaryState.unknown,
+                                                     zoneDescription: assessmentByTag[items[i].tagId]?.description ?? 'موقعیت نامشخص',
+                                                     dateText: recordDateText(items[i]),
+                                                     onShowOnMap: () => setState(() => _focusedTagId = items[i].tagId),
+                                                     onRoute: () => _toggleCamelRoute(items[i]),
+                                                     routeActive: _routeTagId == items[i].tagId,
+                                                   )),
+                                               ],
+                                             ],
+                                           ),
+                                         );
+                                       },
+                                     ),
+                                   ),
+                                 );
+                               }),
+                           ],
+                         ),
+                       ),
                  ),
                ],
              ),
@@ -1559,6 +1897,13 @@ import 'dart:async';
     final List<AreaZone> zones;
     final GeoArea? area;
     final List<PolygonZone> polygonZones;
+    final bool drawAreaBounds;
+    final bool showQuickSelector;
+    final String? focusedTagId;
+    final String? routeTagId;
+    final ValueChanged<TagRecord>? onRouteRequest;
+    final VoidCallback? onRouteClosed;
+    final double height;
 
       const SimpleGpsMap({
         super.key,
@@ -1567,6 +1912,13 @@ import 'dart:async';
         this.zones = const [],
         this.area,
         this.polygonZones = const [],
+        this.drawAreaBounds = true,
+        this.showQuickSelector = true,
+        this.focusedTagId,
+        this.routeTagId,
+        this.onRouteRequest,
+        this.onRouteClosed,
+        this.height = 450,
       });
 
 
@@ -1594,6 +1946,7 @@ import 'dart:async';
        String? selectedCamelPhotoError;
        TagRecord? routeRecord;
        List<TagRecord> routeRecords = [];
+       List<CamelCluster>? _clusterCache;
 
        bool get isRouteMode {
          return routeRecord != null;
@@ -1766,6 +2119,17 @@ double zoneScaleForRecord(TagRecord record) {
          if (widget.records.isNotEmpty) {
            selectedRecord = widget.records.first;
          }
+         if (widget.routeTagId != null) {
+           WidgetsBinding.instance.addPostFrameCallback((_) {
+             if (!mounted) return;
+             for (final r in widget.records) {
+               if (r.tagId == widget.routeTagId) {
+                 showRouteForRecord(r);
+                 break;
+               }
+             }
+           });
+         }
        }
 
      @override
@@ -1779,15 +2143,32 @@ double zoneScaleForRecord(TagRecord record) {
            oldWidget.area?.eastLongitude != widget.area?.eastLongitude ||
            oldWidget.area?.westLongitude != widget.area?.westLongitude;
 
-       if (oldWidget.records != widget.records ||
-           oldWidget.zones != widget.zones ||
-           oldWidget.polygonZones != widget.polygonZones ||
-           areaChanged) {
-         selectedRecord = widget.records.isEmpty
-             ? null
-             : widget.records.first;
-
-         didFitInitialView = false;
+       if (oldWidget.focusedTagId != widget.focusedTagId) {
+         focusExternalCamel();
+       }
+       if (oldWidget.routeTagId != widget.routeTagId ||
+           (widget.routeTagId != null && !identical(oldWidget.trackRecords, widget.trackRecords))) {
+         if (widget.routeTagId == null) {
+           clearRouteMode();
+         } else {
+           for (final record in widget.records) {
+             if (record.tagId == widget.routeTagId) {
+               showRouteForRecord(record);
+               break;
+             }
+           }
+         }
+       }
+       final dataChanged = !listEquals(oldWidget.records, widget.records) ||
+           !listEquals(oldWidget.zones, widget.zones) ||
+           !listEquals(oldWidget.polygonZones, widget.polygonZones) || areaChanged;
+       if (dataChanged) {
+         _clusterCache = null;
+         // A new GPS point must not reset the user's current pan/zoom.
+         if (oldWidget.records.isEmpty && widget.records.isNotEmpty) {
+           selectedRecord = widget.records.first;
+           didFitInitialView = false;
+         }
        }
      }
 
@@ -1798,6 +2179,17 @@ double zoneScaleForRecord(TagRecord record) {
          transformationController.dispose();
          super.dispose();
        }
+
+     void focusExternalCamel() {
+       final id = widget.focusedTagId;
+       if (id == null) return;
+       final records = widget.records.where((r) => r.tagId == id);
+       if (records.isEmpty) return;
+       WidgetsBinding.instance.addPostFrameCallback((_) {
+         if (!mounted || viewportSize == Size.zero) return;
+         zoomToRecord(records.first, showPhoto: true);
+       });
+     }
 
      List<PolygonZone> get activePolygonZones {
        return widget.polygonZones
@@ -1810,7 +2202,7 @@ double zoneScaleForRecord(TagRecord record) {
        List<TagRecord> get mapRecords {
          return widget.records.where((record) {
            return record.latitude != null && record.longitude != null;
-         }).take(50).toList();
+         }).toList();
        }
 
        List<TagRecord> get visibleMapRecords {
@@ -1842,62 +2234,17 @@ double zoneScaleForRecord(TagRecord record) {
 
 
       List<CamelCluster> get camelClusters {
-        const maxDistanceMeters = 20.0;
-
-        final clusters = <CamelCluster>[];
-
-        final sourceRecords = isRouteMode
-            ? visibleMapRecords
-            : mapRecords;
-
-        for (final record in sourceRecords) {
-          if (record.latitude == null || record.longitude == null) {
-            continue;
-          }
-
-          final zoneKey = clusterZoneKeyForRecord(record);
-          final zoneTitle = clusterZoneTitleForRecord(record);
-
-          CamelCluster? target;
-
-          for (final cluster in clusters) {
-            if (cluster.zoneKey != zoneKey) {
-              continue;
-            }
-
-            final distance = distanceMetersBetween(
-              lat1: cluster.latitude,
-              lng1: cluster.longitude,
-              lat2: record.latitude!,
-              lng2: record.longitude!,
-            );
-
-            if (distance <= maxDistanceMeters) {
-              target = cluster;
-              break;
-            }
-          }
-
-          if (target == null) {
-            clusters.add(
-              CamelCluster(
-                latitude: record.latitude!,
-                longitude: record.longitude!,
-                zoneKey: zoneKey,
-                zoneTitle: zoneTitle,
-                records: [
-                  record,
-                ],
-              ),
-            );
-          } else {
-            target.addRecord(record);
-          }
-        }
-
-        return clusters;
+        return _clusterCache ??= MapClusterService.build(
+          isRouteMode ? visibleMapRecords : mapRecords,
+          widget.area, activeZones, activePolygonZones,
+        ).map((group) => CamelCluster(
+          latitude: group.latitude,
+          longitude: group.longitude,
+          zoneKey: group.zoneKey,
+          zoneTitle: clusterZoneTitleForRecord(group.members.first),
+          records: [...group.members],
+        )).toList();
       }
-
 
        int get totalClusterCount {
 
@@ -1927,14 +2274,14 @@ double zoneScaleForRecord(TagRecord record) {
                vertical: 8,
              ),
              decoration: BoxDecoration(
-               color: Colors.white.withOpacity(0.94),
+               color: Colors.white.withValues(alpha: 0.94),
                borderRadius: BorderRadius.circular(14),
                border: Border.all(
                  color: const Color(0xFFC8EBDD),
                ),
                boxShadow: [
                  BoxShadow(
-                   color: Colors.black.withOpacity(0.10),
+                   color: Colors.black.withValues(alpha: 0.10),
                    blurRadius: 12,
                    offset: const Offset(0, 4),
                  ),
@@ -2594,13 +2941,13 @@ double zoneScaleForRecord(TagRecord record) {
 
 
                 color:
-                    color.withOpacity(0.08),
+                    color.withValues(alpha: 0.08),
 
 
                 border: Border.all(
 
                   color:
-                      color.withOpacity(0.55),
+                      color.withValues(alpha: 0.55),
 
                   width: 1.4,
 
@@ -2678,7 +3025,7 @@ double zoneScaleForRecord(TagRecord record) {
                BoxDecoration(
 
                  color:
-                     Colors.white.withOpacity(0.85),
+                     Colors.white.withValues(alpha: 0.85),
 
 
                  borderRadius:
@@ -2689,7 +3036,7 @@ double zoneScaleForRecord(TagRecord record) {
                      Border.all(
                        color:
                            zoneColor(zone)
-                               .withOpacity(0.25),
+                               .withValues(alpha: 0.25),
                      ),
 
                ),
@@ -2742,6 +3089,7 @@ double zoneScaleForRecord(TagRecord record) {
 
 
      Widget buildSelectedAreaShape() {
+       if (!widget.drawAreaBounds) return const SizedBox.shrink();
        final area = widget.area;
 
        if (area == null) {
@@ -2779,10 +3127,10 @@ double zoneScaleForRecord(TagRecord record) {
              width: width,
              height: height,
              decoration: BoxDecoration(
-               color: const Color(0xFF008B62).withOpacity(0.018),
+               color: const Color(0xFF008B62).withValues(alpha: 0.018),
                borderRadius: BorderRadius.circular(10),
                border: Border.all(
-                 color: const Color(0xFF008B62).withOpacity(0.35),
+                 color: const Color(0xFF008B62).withValues(alpha: 0.35),
                  width: 1.1,
                ),
              ),
@@ -2896,6 +3244,11 @@ double zoneScaleForRecord(TagRecord record) {
               point.dy - minY + padding,
             ),
           ).toList();
+      final localHoles = zone.holes.map((ring) => ring.map((point) {
+        final p = positionForLatLng(
+          latitude: point.latitude, longitude: point.longitude);
+        return Offset(p.dx - minX + padding, p.dy - minY + padding);
+      }).toList()).toList();
 
 
 
@@ -2938,6 +3291,7 @@ double zoneScaleForRecord(TagRecord record) {
             painter: _PolygonZonePainter(
 
               offsets: localPoints,
+              holeOffsets: localHoles,
 
               color:
                   polygonZoneColor(
@@ -3061,7 +3415,7 @@ double zoneScaleForRecord(TagRecord record) {
                 BoxDecoration(
 
                   color:
-                      Colors.white.withOpacity(
+                      Colors.white.withValues(alpha: 
                         0.88,
                       ),
 
@@ -3074,7 +3428,7 @@ double zoneScaleForRecord(TagRecord record) {
                         color:
                             polygonZoneColor(
                               zone.type,
-                            ).withOpacity(.25),
+                            ).withValues(alpha: .25),
                       ),
 
                 ),
@@ -3159,6 +3513,11 @@ double zoneScaleForRecord(TagRecord record) {
       }
 
       void showRouteForRecord(TagRecord record) {
+        _clusterCache = null;
+        if (widget.routeTagId != record.tagId && widget.onRouteRequest != null) {
+          widget.onRouteRequest!(record);
+          return;
+        }
         final points = widget.trackRecords.where((item) {
           return item.tagId == record.tagId &&
               item.latitude != null &&
@@ -3258,6 +3617,7 @@ double zoneScaleForRecord(TagRecord record) {
 
 
       void clearRouteMode() {
+        _clusterCache = null;
         setState(() {
           routeRecord = null;
           routeRecords = [];
@@ -3793,7 +4153,7 @@ double zoneScaleForRecord(TagRecord record) {
 
                     boxShadow: [
                       BoxShadow(
-                        color: color.withOpacity(0.28),
+                        color: color.withValues(alpha: 0.28),
                         blurRadius: screenToScene(4),
                       ),
                     ],
@@ -3822,7 +4182,7 @@ double zoneScaleForRecord(TagRecord record) {
                     ),
 
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.82),
+                      color: Colors.white.withValues(alpha: 0.82),
                       borderRadius: BorderRadius.circular(
                         screenToScene(3),
                       ),
@@ -3913,7 +4273,7 @@ double zoneScaleForRecord(TagRecord record) {
                    BoxShadow(
 
                      color:
-                         Colors.black.withOpacity(.25),
+                         Colors.black.withValues(alpha: .25),
 
                      blurRadius: 10,
 
@@ -4108,7 +4468,7 @@ double zoneScaleForRecord(TagRecord record) {
                   width: double.infinity,
                   height: 150,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.92),
+                    color: Colors.white.withValues(alpha: 0.92),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
                       color: const Color(0xFFC8EBDD),
@@ -4170,7 +4530,7 @@ double zoneScaleForRecord(TagRecord record) {
                    width: double.infinity,
                    height: 42,
                    child: OutlinedButton.icon(
-                     onPressed: clearRouteMode,
+                     onPressed: () { clearRouteMode(); widget.onRouteClosed?.call(); },
                      icon: const Icon(Icons.close_rounded),
                      label: Text(
                        'بستن مسیر (${routeRecords.length} نقطه)',
@@ -4244,7 +4604,7 @@ double zoneScaleForRecord(TagRecord record) {
 
          return Column(
            children: [
-             SingleChildScrollView(
+             if (widget.showQuickSelector) SingleChildScrollView(
                scrollDirection: Axis.horizontal,
                child: Row(
                  children: [
@@ -4262,11 +4622,7 @@ double zoneScaleForRecord(TagRecord record) {
              ),
              const SizedBox(height: 10),
              SizedBox(
-             height:
-                 math.min(
-                   MediaQuery.of(context).size.height * 0.55,
-                   560,
-                 ),
+             height: widget.height,
                width: double.infinity,
                child: LayoutBuilder(
                  builder: (context, constraints) {
@@ -4360,12 +4716,12 @@ double zoneScaleForRecord(TagRecord record) {
                              vertical: 6,
                            ),
                            decoration: BoxDecoration(
-                             color: Colors.white.withOpacity(0.92),
+                             color: Colors.white.withValues(alpha: 0.92),
                              borderRadius: BorderRadius.circular(12),
                            ),
                            child: Text(
                             isRouteMode
-                                ? 'مسیر شتر ${routeRecord!.camelNo} • ${routeRecords.length} نقطه'
+                                ? 'مسیر ${routeRecord!.camelName} • ${routeRecords.length} نقطه'
                                 : '${mapRecords.length} شتر • ${activePolygonZones.length} محدوده داخلی',
                              style: const TextStyle(
                                color: Color(0xFF062C5E),
@@ -4507,7 +4863,7 @@ double zoneScaleForRecord(TagRecord record) {
 
              decoration: BoxDecoration(
 
-               color: Colors.white.withOpacity(0.92),
+               color: Colors.white.withValues(alpha: 0.92),
 
                borderRadius:
                    BorderRadius.circular(16),
@@ -4518,7 +4874,7 @@ double zoneScaleForRecord(TagRecord record) {
                  BoxShadow(
 
                    color:
-                       Colors.black.withOpacity(0.12),
+                       Colors.black.withValues(alpha: 0.12),
 
                    blurRadius: 14,
 
@@ -4545,11 +4901,13 @@ double zoneScaleForRecord(TagRecord record) {
 
     class _PolygonZonePainter extends CustomPainter {
       final List<Offset> offsets;
+      final List<List<Offset>> holeOffsets;
       final Color color;
 
 
       const _PolygonZonePainter({
         required this.offsets,
+        this.holeOffsets = const [],
         required this.color,
       });
 
@@ -4576,15 +4934,24 @@ double zoneScaleForRecord(TagRecord record) {
         }
 
         path.close();
+        path.fillType = PathFillType.evenOdd;
+        for (final hole in holeOffsets) {
+          if (hole.length < 3) continue;
+          path.moveTo(hole.first.dx, hole.first.dy);
+          for (var i = 1; i < hole.length; i++) {
+            path.lineTo(hole[i].dx, hole[i].dy);
+          }
+          path.close();
+        }
 
 
         final fillPaint = Paint()
-          ..color = color.withOpacity(0.075)
+          ..color = color.withValues(alpha: 0.075)
           ..style = PaintingStyle.fill;
 
 
         final borderPaint = Paint()
-          ..color = color.withOpacity(0.70)
+          ..color = color.withValues(alpha: 0.70)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.6;
 
@@ -4615,7 +4982,7 @@ double zoneScaleForRecord(TagRecord record) {
             point,
             2.6,
             Paint()
-              ..color = color.withOpacity(0.85)
+              ..color = color.withValues(alpha: 0.85)
               ..style = PaintingStyle.stroke
               ..strokeWidth = 1.2,
           );
@@ -4623,96 +4990,6 @@ double zoneScaleForRecord(TagRecord record) {
 
       }
 
-
-
-      Rect _calculateBounds() {
-
-        double minX = offsets.first.dx;
-        double maxX = offsets.first.dx;
-
-        double minY = offsets.first.dy;
-        double maxY = offsets.first.dy;
-
-
-        for (final point in offsets) {
-
-          if (point.dx < minX) {
-            minX = point.dx;
-          }
-
-          if (point.dx > maxX) {
-            maxX = point.dx;
-          }
-
-          if (point.dy < minY) {
-            minY = point.dy;
-          }
-
-          if (point.dy > maxY) {
-            maxY = point.dy;
-          }
-
-        }
-
-
-        return Rect.fromLTRB(
-          minX,
-          minY,
-          maxX,
-          maxY,
-        );
-
-      }
-
-
-
-
-      Offset _calculateCenter() {
-
-        double totalX = 0;
-        double totalY = 0;
-
-
-        for (final point in offsets) {
-
-          totalX += point.dx;
-          totalY += point.dy;
-
-        }
-
-
-        return Offset(
-
-          totalX / offsets.length,
-
-          totalY / offsets.length,
-
-        );
-
-      }
-
-
-
-
-      String _shortText(
-        String text,
-        int maxLength,
-      ) {
-
-        final clean =
-            text.trim();
-
-
-        if (clean.length <= maxLength) {
-
-          return clean;
-
-        }
-
-
-        return '${clean.substring(0, maxLength)}…';
-
-      }
 
 
 
@@ -4723,6 +5000,7 @@ double zoneScaleForRecord(TagRecord record) {
      ) {
 
        return oldDelegate.offsets != offsets ||
+           oldDelegate.holeOffsets != holeOffsets ||
            oldDelegate.color != color;
 
      }
@@ -5055,40 +5333,8 @@ class GpsRecordCard extends StatelessWidget {
   }
 
  String zoneStatusText(ZoneCheckResult? result) {
-   if (!hasGps) {
-     return 'GPS برای این تگ ثبت نشده است.';
-   }
-
-   if (!hasAnyZoneDefinition) {
-     return 'هنوز محدوده‌ای تعریف نشده است.';
-   }
-
-   if (isInsideForbiddenPolygon) {
-     return 'داخل محدوده ممنوع: $containingPolygonNames';
-   }
-
-   if (isInsideAllowedPolygon) {
-     return 'داخل محدوده: $containingPolygonNames';
-   }
-
-   if (result == null) {
-     return 'خارج از محدوده‌های تعریف‌شده';
-   }
-
-   if (result.isInsideForbiddenZone) {
-     final names = result.forbiddenZones.map((zone) => zone.name).join('، ');
-     return 'داخل منطقه ممنوع: $names';
-   }
-
-   if (result.isOutsideAllowedZones) {
-     return 'خارج از محدوده مجاز';
-   }
-
-   if (result.insideZones.isNotEmpty) {
-     return 'داخل محدوده: ${result.insideZonesText}';
-   }
-
-   return 'خارج از محدوده‌های تعریف‌شده';
+   if (!hasGps) return 'GPS برای این تگ ثبت نشده است.';
+   return MapHerdStatus.assess(record, null, zones, polygonZones).description;
  }
 
   Color zoneStatusColor(ZoneCheckResult? result) {
@@ -5179,11 +5425,11 @@ class GpsRecordCard extends StatelessWidget {
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: mainStatusColor.withOpacity(0.22),
+            color: mainStatusColor.withValues(alpha: 0.22),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 12,
               offset: const Offset(0, 6),
             ),
@@ -5195,7 +5441,7 @@ class GpsRecordCard extends StatelessWidget {
               children: [
                 CircleAvatar(
                   radius: 24,
-                  backgroundColor: mainStatusColor.withOpacity(0.12),
+                  backgroundColor: mainStatusColor.withValues(alpha: 0.12),
                   child: Text(
                     record.camelNo,
                     style: TextStyle(
@@ -5235,7 +5481,7 @@ class GpsRecordCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: mainStatusColor.withOpacity(0.10),
+                    color: mainStatusColor.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
@@ -5346,10 +5592,10 @@ class GpsRecordCard extends StatelessWidget {
                 vertical: 10,
               ),
               decoration: BoxDecoration(
-                color: zoneColor.withOpacity(0.10),
+                color: zoneColor.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: zoneColor.withOpacity(0.20),
+                  color: zoneColor.withValues(alpha: 0.20),
                 ),
               ),
               child: Row(
@@ -5449,7 +5695,7 @@ class _CamelRoutePainter extends CustomPainter {
       }
 
       final shadowPaint = Paint()
-        ..color = Colors.white.withOpacity(0.82)
+        ..color = Colors.white.withValues(alpha: 0.82)
         ..strokeWidth = sceneSize(5)
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
@@ -5478,7 +5724,7 @@ class _CamelRoutePainter extends CustomPainter {
     }
 
     final pointPaint = Paint()
-      ..color = const Color(0xFF008B62).withOpacity(0.70)
+      ..color = const Color(0xFF008B62).withValues(alpha: 0.70)
       ..style = PaintingStyle.fill;
 
     for (final point in points.skip(1).take(points.length - 2)) {
@@ -5573,13 +5819,13 @@ class _CamelRoutePainter extends CustomPainter {
 
     canvas.drawRRect(
       rrect,
-      Paint()..color = Colors.white.withOpacity(0.88),
+      Paint()..color = Colors.white.withValues(alpha: 0.88),
     );
 
     canvas.drawRRect(
       rrect,
       Paint()
-        ..color = color.withOpacity(0.30)
+        ..color = color.withValues(alpha: 0.30)
         ..style = PaintingStyle.stroke
         ..strokeWidth = sceneSize(0.8),
     );
@@ -5663,7 +5909,7 @@ class _CamelRoutePainter extends CustomPainter {
     canvas.drawPath(
       arrowPath,
       Paint()
-        ..color = Colors.white.withOpacity(0.90)
+        ..color = Colors.white.withValues(alpha: 0.90)
         ..style = PaintingStyle.fill,
     );
 
@@ -5707,7 +5953,7 @@ class _GpsCardMiniBadge extends StatelessWidget {
         vertical: 8,
       ),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.09),
+        color: color.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -6233,7 +6479,7 @@ class AreaZoneCard extends StatelessWidget {
           Row(
             children: [
               CircleAvatar(
-                backgroundColor: color.withOpacity(0.12),
+                backgroundColor: color.withValues(alpha: 0.12),
                 child: Icon(
                   zoneIcon,
                   color: color,
@@ -6397,8 +6643,8 @@ class _MapTagDetailPage extends StatelessWidget {
                     ),
                     decoration: BoxDecoration(
                       color: isLowBattery
-                          ? Colors.red.withOpacity(0.10)
-                          : Colors.green.withOpacity(0.10),
+                          ? Colors.red.withValues(alpha: 0.10)
+                          : Colors.green.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(

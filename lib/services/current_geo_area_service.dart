@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'map_data_events.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -20,6 +21,7 @@ class CurrentGeoAreaService {
         area.toMap(),
       ),
     );
+    MapDataEvents.changed();
   }
 
   static Future<GeoArea?> load() async {
@@ -83,5 +85,6 @@ class CurrentGeoAreaService {
         await SharedPreferences.getInstance();
 
     await prefs.remove(key);
+    MapDataEvents.changed();
   }
 }
